@@ -11,13 +11,12 @@ import android.os.Bundle;
 import android.view.MotionEvent;
 import android.view.View;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Locale;
 
 /** All drawing is resolution-independent and happens on the UI frame clock. */
 public final class RunnerView extends View {
-    private static final String SCORES_KEY = "completed_attempt_distances";
+    private static final String BEST_SCORE_KEY = "best_run_distance";
+    private static final String OLD_SCORES_KEY = "completed_attempt_distances";
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
@@ -35,18 +34,18 @@ public final class RunnerView extends View {
     public RunnerView(Context context) {
         super(context);
         scorePreferences = context.getSharedPreferences("runner_scores", Context.MODE_PRIVATE);
-        ArrayList<Integer> scores = new ArrayList<>();
-        String storedScores = scorePreferences.getString(SCORES_KEY, "");
+        int best = scorePreferences.getInt(BEST_SCORE_KEY, 0);
+        String storedScores = scorePreferences.getString(OLD_SCORES_KEY, "");
         if (storedScores != null && !storedScores.isEmpty()) {
             for (String value : storedScores.split(",")) {
                 try {
-                    scores.add(Integer.parseInt(value));
+                    best = Math.max(best, Integer.parseInt(value));
                 } catch (NumberFormatException ignored) {
                     // Ignore a corrupt score instead of preventing the game from starting.
                 }
             }
         }
-        engine.loadAttemptDistances(scores);
+        engine.loadBestDistance(best);
         setFocusable(true);
         setContentDescription("Skybound Runner game. Tap anywhere to jump while running.");
     }
@@ -62,9 +61,9 @@ public final class RunnerView extends View {
         long now = System.nanoTime();
         if (lastFrameNanos != 0L) {
             float dt = Math.min((now - lastFrameNanos) / 1_000_000_000f, .05f);
-            int completed = engine.getCompletedAttemptCount();
+            int previousBest = engine.getBestDistance();
             engine.update(dt);
-            if (engine.getCompletedAttemptCount() != completed) saveScores();
+            if (engine.getBestDistance() > previousBest) saveBestScore();
         }
         lastFrameNanos = now;
 
@@ -153,7 +152,7 @@ public final class RunnerView extends View {
         x = hudItem(canvas, "Best " + engine.getBestDistance() + " m", x);
         hudItem(canvas, String.format(Locale.US, "Speed %.1f m/s",
                 engine.getSpeedMetersPerSecond()), x);
-        text(canvas, "Attempt " + engine.getAttempts(), logicalWidth - 75f, 38f,
+        text(canvas, "Lives " + engine.getLives(), logicalWidth - 75f, 38f,
                 18f, INK, Paint.Align.RIGHT);
         drawHealth(canvas);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
@@ -203,6 +202,14 @@ public final class RunnerView extends View {
             text(canvas, "Paused", midX, midY - 90f, 44f,
                     Color.WHITE, Paint.Align.CENTER);
             button(canvas, "Continue", midX, midY);
+        } else if (mode == RunnerEngine.Mode.GAME_OVER) {
+            canvas.drawColor(0x690F2D61);
+            text(canvas, "Game over", midX, midY - 100f, 44f,
+                    Color.WHITE, Paint.Align.CENTER);
+            text(canvas, "Distance " + engine.getDistance() + " m  |  Best "
+                    + engine.getBestDistance() + " m", midX, midY - 52f, 20f,
+                    Color.WHITE, Paint.Align.CENTER);
+            button(canvas, "Restart", midX, midY);
         } else if (mode == RunnerEngine.Mode.TITLE) {
             text(canvas, "SKYBOUND RUNNER", midX, midY - 100f,
                     42f, INK, Paint.Align.CENTER);
@@ -211,7 +218,9 @@ public final class RunnerView extends View {
                     21f, INK, Paint.Align.CENTER);
         } else {
             int number = Math.max(1, (int) Math.ceil(engine.getCountdownSeconds()));
-            text(canvas, "Get ready", midX, midY - 85f, 27f,
+            text(canvas, engine.getLives() < RunnerEngine.MAX_LIVES
+                    ? "Life lost - " + engine.getLives() + " left" : "Get ready",
+                    midX, midY - 85f, 27f,
                     INK, Paint.Align.CENTER);
             text(canvas, String.valueOf(number), midX, midY + 29f, 90f,
                     INK, Paint.Align.CENTER);
@@ -249,10 +258,11 @@ public final class RunnerView extends View {
             lastFrameNanos = 0L;
         } else if (mode == RunnerEngine.Mode.RUNNING) {
             engine.jump();
-        } else if (mode == RunnerEngine.Mode.TITLE || mode == RunnerEngine.Mode.PAUSED) {
+        } else if (mode == RunnerEngine.Mode.TITLE || mode == RunnerEngine.Mode.PAUSED
+                || mode == RunnerEngine.Mode.GAME_OVER) {
             if (Math.abs(x - logicalWidth / 2f) <= 110f
                     && Math.abs(y - RunnerEngine.WORLD_HEIGHT / 2f) <= 35f) {
-                if (mode == RunnerEngine.Mode.TITLE) {
+                if (mode == RunnerEngine.Mode.TITLE || mode == RunnerEngine.Mode.GAME_OVER) {
                     engine.startNewGame(System.nanoTime());
                 } else {
                     engine.continueGame();
@@ -277,7 +287,7 @@ public final class RunnerView extends View {
 
     public void save(Bundle out) {
         out.putLong("seed", engine.getSeed());
-        out.putInt("attempts", engine.getAttempts());
+        out.putInt("lives", engine.getLives());
         out.putFloat("x", engine.getPlayerX());
         out.putFloat("y", engine.getPlayerY());
         out.putFloat("vy", engine.getVelocityY());
@@ -286,10 +296,6 @@ public final class RunnerView extends View {
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
         out.putInt("health", engine.getHealth());
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
-        out.putFloat("recoilHold", engine.getRecoilHoldSeconds());
-        out.putBoolean("recoveringSpeed", engine.isRecoveringSpeed());
-        out.putFloat("speedBeforeRecoil", engine.getSpeedBeforeRecoil());
-        out.putFloat("recoveryEndX", engine.getRecoveryEndX());
         out.putFloatArray("defeatedAntagonists", engine.getDefeatedAntagonists());
         out.putFloat("farthestX", engine.getFarthestX());
         out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
@@ -301,7 +307,8 @@ public final class RunnerView extends View {
 
     public void restore(Bundle saved) {
         try {
-            engine.restore(saved.getLong("seed", 1L), saved.getInt("attempts", 1),
+            engine.restore(saved.getLong("seed", 1L),
+                    saved.getInt("lives", RunnerEngine.MAX_LIVES),
                     saved.getFloat("x", 140f),
                     saved.getFloat("y", RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT),
                     saved.getFloat("vy", 0f), saved.getFloat("countdown", 3f),
@@ -315,10 +322,6 @@ public final class RunnerView extends View {
                     saved.getFloat("visibleWidth", 960f),
                     saved.getFloatArray("antagonistTimers"),
                     saved.getFloatArray("projectiles"),
-                    saved.getFloat("recoilHold", 0f),
-                    saved.getBoolean("recoveringSpeed", false),
-                    saved.getFloat("speedBeforeRecoil", 0f),
-                    saved.getFloat("recoveryEndX", 0f),
                     saved.getFloatArray("defeatedAntagonists"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
@@ -326,13 +329,7 @@ public final class RunnerView extends View {
         lastFrameNanos = 0L;
     }
 
-    private void saveScores() {
-        List<Integer> scores = engine.getCompletedAttemptDistances();
-        StringBuilder encoded = new StringBuilder();
-        for (int score : scores) {
-            if (encoded.length() > 0) encoded.append(',');
-            encoded.append(score);
-        }
-        scorePreferences.edit().putString(SCORES_KEY, encoded.toString()).apply();
+    private void saveBestScore() {
+        scorePreferences.edit().putInt(BEST_SCORE_KEY, engine.getBestDistance()).apply();
     }
 }
