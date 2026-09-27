@@ -1,1 +1,28 @@
-# skybound-jumper
+# Skybound Runner
+
+A lightweight Android side scroller prototype. The oval runner moves automatically; tap anywhere while running to jump. Raised yellow walls act as ledges. Jump onto them and across holes. Contact with a wall or a fall into a hole returns the runner to the beginning of the **same** course. Tapping Start on a fresh launch generates a new course.
+
+## Playing
+
+1. Install the debug APK on an Android 6.0 (API 23) or newer device and launch **Skybound Runner**.
+2. Tap **Start**. The three second countdown begins.
+3. Tap anywhere to jump. A jump is available when standing on ground or a ledge.
+4. Send the app to the background and return to see **Continue**. It resumes the current run or the remaining countdown.
+
+The game is designed for landscape orientation. It does not require internet access or any runtime permissions.
+
+## Editing and building
+
+Open this directory as a project in Android Studio. It uses the Android Gradle plugin 8.7.3, Java 8 source compatibility, compile SDK 35, and no external runtime libraries. Run `./gradlew assembleDebug` (or `gradlew.bat assembleDebug` on Windows) to build a new debug APK. Android Studio may need to download Gradle and the Android SDK on first use. The checked-in source does not include a private signing key; new debug builds may need the previously installed prototype removed before installation.
+
+If you have Android SDK platform 35 and build tools 35.0.0 but no Gradle, you can also run `ANDROID_HOME=/path/to/android-sdk bash tools/build_with_sdk.sh` from this directory. This creates `SkyboundRunner-debug.apk` at the project root.
+
+The gameplay is in `app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java`, independently of Android APIs; `RunnerView.java` handles drawing and touch. The executable core checks are in `tools/RunnerEngineChecks.java` and can run with:
+
+```bash
+mkdir -p /tmp/skybound-checks
+javac -d /tmp/skybound-checks app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java tools/RunnerEngineChecks.java
+java -cp /tmp/skybound-checks com.stepan.skyboundrunner.RunnerEngineChecks
+```
+
+This is a test build signed with a debug key. For Play Store distribution it needs a release signing key and a publication review.
