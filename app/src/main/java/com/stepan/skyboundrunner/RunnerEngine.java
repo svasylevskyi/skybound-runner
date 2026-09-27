@@ -19,7 +19,6 @@ public final class RunnerEngine {
 
     private static final float START_X = 140f;
     private static final float ENEMY_START_DISTANCE = 500f * WORLD_UNITS_PER_METER;
-    private static final float RECOIL_DISTANCE = 72f;
     private static final float RECOIL_HOLD_SECONDS = .5f;
     private static final float DAMAGE_RECOVERY_SECONDS = .65f;
     private static final float SHOT_INTERVAL_SECONDS = 1.5f;
@@ -30,6 +29,8 @@ public final class RunnerEngine {
     private static final float SPEED_INTERVAL_SECONDS = 3f;
     private static final float GRAVITY = 1080f;
     private static final float JUMP_VELOCITY = -490f;
+    // Half the horizontal distance of a full jump at the starting run speed.
+    private static final float RECOIL_DISTANCE = -JUMP_VELOCITY * BASE_SPEED / GRAVITY;
     private static final float THIRTY_DEGREE_RUN = 1.7320508f;
     private static final float SLOPE_RECOVERY_PER_SECOND = .25f;
     private static final HazardType[] HAZARD_TYPES = HazardType.values();
@@ -345,12 +346,15 @@ public final class RunnerEngine {
                     && playerX + 4f < antagonist.x + PLAYER_WIDTH - 4f
                     && playerY + PLAYER_HEIGHT - 5f > antagonist.y + 5f
                     && playerY + 5f < antagonist.y + PLAYER_HEIGHT - 5f) {
-                if (damageRecoverySeconds <= 0f) {
+                float topQuarterEnd = antagonist.y + PLAYER_HEIGHT / 4f;
+                boolean stomped = !wasStanding && velocityY > 0f
+                        && oldFeet <= topQuarterEnd
+                        && playerY + PLAYER_HEIGHT >= antagonist.y + 5f;
+                if (stomped || damageRecoverySeconds <= 0f) {
                     defeatedAntagonists.add(antagonist.x);
                     antagonists.remove(i);
                 }
-                if (hitSolid(antagonist.x, antagonist.x + PLAYER_WIDTH,
-                        wasStanding)) return true;
+                if (!stomped && takeDamage()) return true;
                 break;
             }
         }
