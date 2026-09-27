@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.MotionEvent;
@@ -24,6 +25,7 @@ public final class RunnerView extends View {
 
     private final RunnerEngine engine = new RunnerEngine();
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Path terrainPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
@@ -95,8 +97,7 @@ public final class RunnerView extends View {
                         Math.min(hazard.x, right), RunnerEngine.WORLD_HEIGHT, paint);
             }
             if (hazard.type == RunnerEngine.HazardType.DIP) {
-                canvas.drawRect(hazard.x, RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH,
-                        hazard.end(), RunnerEngine.WORLD_HEIGHT, paint);
+                drawTerrainShape(canvas, hazard);
             }
             cursor = Math.max(cursor, hazard.end());
         }
@@ -107,8 +108,7 @@ public final class RunnerView extends View {
         for (RunnerEngine.Hazard hazard : engine.getHazards()) {
             if (hazard.type != RunnerEngine.HazardType.WALL) continue;
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
-            canvas.drawRect(hazard.x, RunnerEngine.GROUND_Y - RunnerEngine.LEDGE_HEIGHT,
-                    hazard.end(), RunnerEngine.GROUND_Y, paint);
+            drawTerrainShape(canvas, hazard);
         }
         paint.setColor(AVATAR);
         canvas.drawOval(engine.getPlayerX(), engine.getPlayerY(),
@@ -117,13 +117,28 @@ public final class RunnerView extends View {
         canvas.restore();
     }
 
+    private void drawTerrainShape(Canvas canvas, RunnerEngine.Hazard hazard) {
+        float flatY = hazard.type == RunnerEngine.HazardType.WALL
+                ? RunnerEngine.GROUND_Y - RunnerEngine.LEDGE_HEIGHT
+                : RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH;
+        terrainPath.rewind();
+        terrainPath.moveTo(hazard.x, RunnerEngine.GROUND_Y);
+        terrainPath.lineTo(hazard.flatStart, flatY);
+        terrainPath.lineTo(hazard.flatEnd, flatY);
+        terrainPath.lineTo(hazard.end(), RunnerEngine.GROUND_Y);
+        terrainPath.lineTo(hazard.end(), RunnerEngine.WORLD_HEIGHT);
+        terrainPath.lineTo(hazard.x, RunnerEngine.WORLD_HEIGHT);
+        terrainPath.close();
+        canvas.drawPath(terrainPath, paint);
+    }
+
     private void drawHud(Canvas canvas) {
         if (engine.getMode() == RunnerEngine.Mode.TITLE) return;
         float x = 24f;
         x = hudItem(canvas, "Distance " + engine.getDistance() + " m", x);
         x = hudItem(canvas, "Best " + engine.getBestDistance() + " m", x);
-        hudItem(canvas, String.format(Locale.US, "Speed %.2f×",
-                engine.getSpeed() / RunnerEngine.BASE_SPEED), x);
+        hudItem(canvas, String.format(Locale.US, "Speed %.1f m/s",
+                engine.getSpeedMetersPerSecond()), x);
         text(canvas, "Attempt " + engine.getAttempts(), logicalWidth - 75f, 38f,
                 18f, INK, Paint.Align.RIGHT);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
@@ -240,6 +255,7 @@ public final class RunnerView extends View {
         out.putFloat("vy", engine.getVelocityY());
         out.putFloat("countdown", engine.getCountdownSeconds());
         out.putDouble("elapsedRun", engine.getElapsedRunSeconds());
+        out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
         out.putString("mode", engine.getMode().name());
         out.putString("resumeMode", engine.getResumeMode().name());
     }
@@ -251,6 +267,7 @@ public final class RunnerView extends View {
                     saved.getFloat("y", RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT),
                     saved.getFloat("vy", 0f), saved.getFloat("countdown", 3f),
                     saved.getDouble("elapsedRun", 0d),
+                    saved.getFloat("slopeSpeed", 1f),
                     RunnerEngine.Mode.valueOf(saved.getString("mode", "TITLE")),
                     RunnerEngine.Mode.valueOf(saved.getString("resumeMode", "RUNNING")));
         } catch (IllegalArgumentException ignored) {
