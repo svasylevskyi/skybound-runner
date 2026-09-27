@@ -161,7 +161,8 @@ public final class RunnerView extends View {
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN) {
             drawPauseButton(canvas);
         }
-        if (engine.getMode() == RunnerEngine.Mode.RUNNING) {
+        if (engine.getMode() == RunnerEngine.Mode.RUNNING
+                && !engine.hasCompletedFirstJump()) {
             text(canvas, "Tap anywhere to jump", logicalWidth / 2f, 122f,
                     18f, INK, Paint.Align.CENTER);
         }
@@ -346,6 +347,9 @@ public final class RunnerView extends View {
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
         out.putFloatArray("defeatedAntagonists", engine.getDefeatedAntagonists());
         out.putFloat("farthestX", engine.getFarthestX());
+        out.putInt("bonusMeters", engine.getBonusMeters());
+        out.putBoolean("firstJumpCompleted", engine.hasCompletedFirstJump());
+        out.putBoolean("jumpInProgress", engine.isControlledJumpInProgress());
         out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
         out.putFloatArray("antagonistTimers", engine.getAntagonistTimers());
         out.putFloatArray("projectiles", engine.getProjectileState());
@@ -370,7 +374,10 @@ public final class RunnerView extends View {
                     saved.getFloat("visibleWidth", 960f),
                     saved.getFloatArray("antagonistTimers"),
                     saved.getFloatArray("projectiles"),
-                    saved.getFloatArray("defeatedAntagonists"));
+                    saved.getFloatArray("defeatedAntagonists"),
+                    saved.getInt("bonusMeters", 0),
+                    saved.getBoolean("firstJumpCompleted", false),
+                    saved.getBoolean("jumpInProgress", false));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }
