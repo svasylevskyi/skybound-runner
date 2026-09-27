@@ -20,6 +20,10 @@ public final class RunnerEngine {
 
     private static final float START_X = 140f;
     private static final float ENEMY_START_DISTANCE = 500f * WORLD_UNITS_PER_METER;
+    private static final float MOVING_ENEMY_START_DISTANCE = 1200f * WORLD_UNITS_PER_METER;
+    private static final float ENEMY_PATROL_RANGE = 5f * WORLD_UNITS_PER_METER;
+    private static final float ENEMY_PATROL_SPEED = 42f;
+    private static final float BONUS_POPUP_SECONDS = .9f;
     private static final float RESPAWN_DISTANCE = 50f * WORLD_UNITS_PER_METER;
     private static final float SAFE_RESPAWN_LEAD = 110f;
     private static final float DAMAGE_RECOVERY_SECONDS = .65f;
@@ -31,6 +35,8 @@ public final class RunnerEngine {
     private static final float SPEED_INTERVAL_SECONDS = 3f;
     private static final float GRAVITY = 1080f;
     private static final float JUMP_VELOCITY = -490f;
+    private static final float ENEMY_JUMP_VELOCITY =
+            JUMP_VELOCITY * .4472136f; // sqrt(.2): 20% of the player's jump height.
     private static final float THIRTY_DEGREE_RUN = 1.7320508f;
     private static final float SLOPE_RECOVERY_PER_SECOND = .25f;
     private static final HazardType[] HAZARD_TYPES = HazardType.values();
@@ -38,6 +44,7 @@ public final class RunnerEngine {
 
     public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER }
     public enum HazardType { HOLE, WALL, DIP }
+    public enum EnemyType { STATIONARY, MOVING }
 
     public static final class Hazard {
         public final HazardType type;
@@ -94,11 +101,21 @@ public final class RunnerEngine {
     }
 
     public static final class Antagonist {
-        public final float x;
-        public final float y;
+        public final float spawnX;
+        public final EnemyType type;
+        public float x;
+        public float y;
         private float shotTimer = .75f;
+        private float directionTimer;
+        private float jumpTimer;
+        private float jumpOffset;
+        private float jumpVelocity;
+        private int direction;
+        private int behaviorStep;
 
-        private Antagonist(float x, float y) {
+        private Antagonist(float x, float y, EnemyType type) {
+            this.spawnX = x;
+            this.type = type;
             this.x = x;
             this.y = y;
         }
@@ -109,22 +126,43 @@ public final class RunnerEngine {
         private float y;
         private final float vx;
         private final float vy;
+        public final EnemyType type;
 
-        private Projectile(float x, float y, float vx, float vy) {
+        private Projectile(float x, float y, float vx, float vy, EnemyType type) {
             this.x = x;
             this.y = y;
             this.vx = vx;
             this.vy = vy;
+            this.type = type;
         }
 
         public float getX() { return x; }
         public float getY() { return y; }
     }
 
+    public static final class BonusPopup {
+        public final float x;
+        public final float y;
+        public final int amount;
+        public final EnemyType type;
+        private float remainingSeconds;
+
+        private BonusPopup(float x, float y, int amount, EnemyType type, float remainingSeconds) {
+            this.x = x;
+            this.y = y;
+            this.amount = amount;
+            this.type = type;
+            this.remainingSeconds = remainingSeconds;
+        }
+
+        public float getProgress() { return 1f - remainingSeconds / BONUS_POPUP_SECONDS; }
+    }
+
     private final List<Hazard> hazards = new ArrayList<>();
     private final List<Antagonist> antagonists = new ArrayList<>();
     private final List<Float> defeatedAntagonists = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
+    private final List<BonusPopup> bonusPopups = new ArrayList<>();
     private Random random;
     private Random antagonistRandom;
     private float nextHazardX;
@@ -167,6 +205,7 @@ public final class RunnerEngine {
         antagonists.clear();
         defeatedAntagonists.clear();
         projectiles.clear();
+        bonusPopups.clear();
         nextHazardX = 840f;
         nextAntagonistX = START_X + ENEMY_START_DISTANCE + 900f
                 + antagonistRandom.nextInt(500);
@@ -205,6 +244,13 @@ public final class RunnerEngine {
         if (getCourseDistance() < 500) return;
         while (nextAntagonistX < worldX) {
             float x = nextAntagonistX;
+            if (x >= START_X + MOVING_ENEMY_START_DISTANCE
+                    && getCourseDistance() < 1200) break;
+            // Choose a type without consuming the spawn RNG, so existing enemy locations stay put.
+            EnemyType type = x >= START_X + MOVING_ENEMY_START_DISTANCE
+                    && new Random(seed ^ 0xA0761D6478BD642FL
+                    ^ ((long) Float.floatToIntBits(x) * 0xE7037ED1A0B428DBL)).nextBoolean()
+                    ? EnemyType.MOVING : EnemyType.STATIONARY;
             float left = surfaceYAt(x + 2f);
             float center = surfaceYAt(x + PLAYER_WIDTH / 2f);
             float right = surfaceYAt(x + PLAYER_WIDTH - 2f);
@@ -212,10 +258,17 @@ public final class RunnerEngine {
                     && !Float.isNaN(left) && !Float.isNaN(right)
                     && Math.abs(left - center) <= 20f
                     && Math.abs(right - center) <= 20f) {
-                antagonists.add(new Antagonist(x, center - PLAYER_HEIGHT));
+                Antagonist antagonist = new Antagonist(x, center - PLAYER_HEIGHT, type);
+                if (type == EnemyType.MOVING) {
+                    antagonist.directionTimer = .35f + nextEnemyRandom(antagonist) * .9f;
+                    antagonist.jumpTimer = .25f + nextEnemyRandom(antagonist) * 1.25f;
+                    antagonist.direction = nextEnemyRandom(antagonist) < .5f ? -1 : 1;
+                }
+                antagonists.add(antagonist);
             }
-            // More than a viewport between candidates guarantees at most one visible enemy.
-            nextAntagonistX += Math.max(1400f, visibleWorldWidth + PLAYER_WIDTH + 80f)
+            // Leave enough room for both enemies to patrol without sharing a screen.
+            nextAntagonistX += Math.max(1400f,
+                    visibleWorldWidth + PLAYER_WIDTH + 2f * ENEMY_PATROL_RANGE + 20f)
                     + antagonistRandom.nextInt(1200);
         }
     }
@@ -238,6 +291,13 @@ public final class RunnerEngine {
         return false;
     }
 
+    private float nextEnemyRandom(Antagonist antagonist) {
+        long behaviorSeed = seed ^ ((long) Float.floatToIntBits(antagonist.spawnX)
+                * 0x9E3779B97F4A7C15L)
+                ^ ((long) antagonist.behaviorStep++ * 0xD1B54A32D192ED03L);
+        return new Random(behaviorSeed).nextFloat();
+    }
+
     private boolean isStanding() {
         float feet = playerY + PLAYER_HEIGHT;
         return velocityY >= 0f
@@ -245,6 +305,9 @@ public final class RunnerEngine {
     }
 
     public void update(float seconds) {
+        if (mode == Mode.RUNNING || mode == Mode.COUNTDOWN || mode == Mode.GAME_OVER) {
+            updateBonusPopups(Math.max(0f, seconds));
+        }
         if (mode == Mode.COUNTDOWN) {
             countdownSeconds -= Math.max(0f, seconds);
             if (countdownSeconds <= 0f) {
@@ -333,6 +396,7 @@ public final class RunnerEngine {
             loseLife();
             return true;
         }
+        updateMovingEnemies(dt);
         for (int i = 0; i < antagonists.size(); i++) {
             Antagonist antagonist = antagonists.get(i);
             if (antagonist.x > playerX + PLAYER_WIDTH) break;
@@ -344,9 +408,12 @@ public final class RunnerEngine {
                 boolean stomped = !wasStanding && velocityY > 0f
                         && oldFeet <= topQuarterEnd
                         && playerY + PLAYER_HEIGHT >= antagonist.y + 5f;
-                defeatedAntagonists.add(antagonist.x);
+                defeatedAntagonists.add(antagonist.spawnX);
                 antagonists.remove(i);
-                bonusMeters += stomped ? 2 : 1;
+                int bonus = stomped ? 2 : 1;
+                bonusMeters += bonus;
+                bonusPopups.add(new BonusPopup(antagonist.x + PLAYER_WIDTH / 2f,
+                        antagonist.y, bonus, antagonist.type, BONUS_POPUP_SECONDS));
                 if (!stomped && takeDamage(2, true)) return true;
                 break;
             }
@@ -354,6 +421,59 @@ public final class RunnerEngine {
         if (updateProjectiles(dt)) return true;
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
+    }
+
+    private void updateMovingEnemies(float dt) {
+        for (Antagonist antagonist : antagonists) {
+            if (antagonist.type != EnemyType.MOVING
+                    || antagonist.spawnX < playerX - 300f
+                    || antagonist.spawnX > playerX + visibleWorldWidth + 300f) continue;
+
+            antagonist.directionTimer -= dt;
+            if (antagonist.directionTimer <= 0f) {
+                antagonist.direction = nextEnemyRandom(antagonist) < .5f ? -1 : 1;
+                antagonist.directionTimer = .35f + nextEnemyRandom(antagonist) * .9f;
+            }
+            float nextX = antagonist.x + antagonist.direction * ENEMY_PATROL_SPEED * dt;
+            if (Math.abs(nextX - antagonist.spawnX) <= ENEMY_PATROL_RANGE
+                    && canStandAt(nextX)) {
+                antagonist.x = nextX;
+            } else {
+                antagonist.direction = -antagonist.direction;
+            }
+
+            antagonist.jumpTimer -= dt;
+            if (antagonist.jumpTimer <= 0f && antagonist.jumpOffset == 0f) {
+                antagonist.jumpVelocity = ENEMY_JUMP_VELOCITY;
+                antagonist.jumpTimer = 1f + nextEnemyRandom(antagonist) * 2f;
+            }
+            if (antagonist.jumpVelocity != 0f) {
+                antagonist.jumpOffset += antagonist.jumpVelocity * dt + .5f * GRAVITY * dt * dt;
+                antagonist.jumpVelocity += GRAVITY * dt;
+                if (antagonist.jumpOffset >= 0f) {
+                    antagonist.jumpOffset = 0f;
+                    antagonist.jumpVelocity = 0f;
+                }
+            }
+            antagonist.y = surfaceYAt(antagonist.x + PLAYER_WIDTH / 2f)
+                    - PLAYER_HEIGHT + antagonist.jumpOffset;
+        }
+    }
+
+    private boolean canStandAt(float x) {
+        float left = surfaceYAt(x + 2f);
+        float center = surfaceYAt(x + PLAYER_WIDTH / 2f);
+        float right = surfaceYAt(x + PLAYER_WIDTH - 2f);
+        return !Float.isNaN(left) && !Float.isNaN(center) && !Float.isNaN(right)
+                && Math.abs(left - center) <= 20f && Math.abs(right - center) <= 20f;
+    }
+
+    private void updateBonusPopups(float dt) {
+        for (int i = bonusPopups.size() - 1; i >= 0; i--) {
+            BonusPopup popup = bonusPopups.get(i);
+            popup.remainingSeconds -= dt;
+            if (popup.remainingSeconds <= 0f) bonusPopups.remove(i);
+        }
     }
 
     private boolean takeDamage(int points, boolean ignoreRecovery) {
@@ -376,7 +496,7 @@ public final class RunnerEngine {
                     float startX = antagonist.x - PROJECTILE_RADIUS - 2f;
                     float startY = antagonist.y + PLAYER_HEIGHT / 2f;
                     projectiles.add(new Projectile(startX, startY,
-                            -SHOT_SPEED, 0f));
+                            -SHOT_SPEED, 0f, antagonist.type));
                     antagonist.shotTimer += SHOT_INTERVAL_SECONDS;
                 }
             }
@@ -513,8 +633,9 @@ public final class RunnerEngine {
                     && center >= hazard.x) return false;
         }
         for (Antagonist antagonist : antagonists) {
-            if (antagonist.x > ahead) break;
-            if (antagonist.x + PLAYER_WIDTH > x) return false;
+            float patrol = antagonist.type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
+            if (antagonist.spawnX - patrol > ahead) break;
+            if (antagonist.spawnX + patrol + PLAYER_WIDTH > x) return false;
         }
         return true;
     }
@@ -577,6 +698,22 @@ public final class RunnerEngine {
                         float[] savedAntagonistTimers, float[] savedProjectiles,
                         float[] savedDefeatedAntagonists, int savedBonusMeters,
                         boolean savedFirstJumpCompleted, boolean savedJumpInProgress) {
+        restore(courseSeed, savedLives, x, y, vy, remainingSeconds, savedRunSeconds,
+                savedTerrainMultiplier, savedMode, savedResumeMode, savedHealth,
+                savedDamageRecovery, savedFarthestX, savedVisibleWidth,
+                savedAntagonistTimers, savedProjectiles, savedDefeatedAntagonists,
+                savedBonusMeters, savedFirstJumpCompleted, savedJumpInProgress, null, null);
+    }
+
+    public void restore(long courseSeed, int savedLives, float x, float y,
+                        float vy, float remainingSeconds, double savedRunSeconds,
+                        float savedTerrainMultiplier, Mode savedMode,
+                        Mode savedResumeMode, int savedHealth, float savedDamageRecovery,
+                        float savedFarthestX, float savedVisibleWidth,
+                        float[] savedAntagonistTimers, float[] savedProjectiles,
+                        float[] savedDefeatedAntagonists, int savedBonusMeters,
+                        boolean savedFirstJumpCompleted, boolean savedJumpInProgress,
+                        float[] savedEnemyState, float[] savedColoredProjectiles) {
         setVisibleWorldWidth(savedVisibleWidth);
         resetCourse(courseSeed);
         lives = Math.max(0, Math.min(MAX_LIVES, savedLives));
@@ -600,20 +737,47 @@ public final class RunnerEngine {
             }
         }
         generateAhead(farthestX + Math.max(1800f, visibleWorldWidth + 550f));
-        if (savedAntagonistTimers != null) {
+        if (savedEnemyState != null) {
+            for (Antagonist antagonist : antagonists) {
+                for (int i = 0; i + 8 < savedEnemyState.length; i += 9) {
+                    if (Math.abs(antagonist.spawnX - savedEnemyState[i]) >= .1f) continue;
+                    float patrol = antagonist.type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
+                    float savedX = Math.max(antagonist.spawnX - patrol,
+                            Math.min(antagonist.spawnX + patrol, savedEnemyState[i + 1]));
+                    if (canStandAt(savedX)) antagonist.x = savedX;
+                    antagonist.shotTimer = Math.max(0f, savedEnemyState[i + 2]);
+                    antagonist.direction = savedEnemyState[i + 3] < 0f ? -1 : 1;
+                    antagonist.directionTimer = Math.max(0f, savedEnemyState[i + 4]);
+                    antagonist.jumpTimer = Math.max(0f, savedEnemyState[i + 5]);
+                    antagonist.jumpOffset = Math.max(-30f, Math.min(0f, savedEnemyState[i + 6]));
+                    antagonist.jumpVelocity = savedEnemyState[i + 7];
+                    antagonist.behaviorStep = Math.max(0, (int) savedEnemyState[i + 8]);
+                    antagonist.y = surfaceYAt(antagonist.x + PLAYER_WIDTH / 2f)
+                            - PLAYER_HEIGHT + antagonist.jumpOffset;
+                    break;
+                }
+            }
+        } else if (savedAntagonistTimers != null) {
             for (Antagonist antagonist : antagonists) {
                 for (int i = 0; i + 1 < savedAntagonistTimers.length; i += 2) {
-                    if (Math.abs(antagonist.x - savedAntagonistTimers[i]) < .1f) {
+                    if (Math.abs(antagonist.spawnX - savedAntagonistTimers[i]) < .1f) {
                         antagonist.shotTimer = Math.max(0f, savedAntagonistTimers[i + 1]);
                         break;
                     }
                 }
             }
         }
-        if (savedProjectiles != null) {
+        if (savedColoredProjectiles != null) {
+            for (int i = 0; i + 4 < savedColoredProjectiles.length; i += 5) {
+                EnemyType type = savedColoredProjectiles[i + 4] == 1f
+                        ? EnemyType.MOVING : EnemyType.STATIONARY;
+                projectiles.add(new Projectile(savedColoredProjectiles[i],
+                        savedColoredProjectiles[i + 1], -SHOT_SPEED, 0f, type));
+            }
+        } else if (savedProjectiles != null) {
             for (int i = 0; i + 3 < savedProjectiles.length; i += 4) {
                 projectiles.add(new Projectile(savedProjectiles[i], savedProjectiles[i + 1],
-                        -SHOT_SPEED, 0f));
+                        -SHOT_SPEED, 0f, EnemyType.STATIONARY));
             }
         }
         if (savedMode == Mode.TITLE) {
@@ -630,6 +794,7 @@ public final class RunnerEngine {
 
     public List<Hazard> getHazards() { return hazards; }
     public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
+    public List<BonusPopup> getBonusPopups() { return Collections.unmodifiableList(bonusPopups); }
     public float[] getDefeatedAntagonists() {
         float[] state = new float[defeatedAntagonists.size()];
         for (int i = 0; i < state.length; i++) state[i] = defeatedAntagonists.get(i);
@@ -639,8 +804,25 @@ public final class RunnerEngine {
     public float[] getAntagonistTimers() {
         float[] state = new float[antagonists.size() * 2];
         for (int i = 0; i < antagonists.size(); i++) {
-            state[i * 2] = antagonists.get(i).x;
+            state[i * 2] = antagonists.get(i).spawnX;
             state[i * 2 + 1] = antagonists.get(i).shotTimer;
+        }
+        return state;
+    }
+    public float[] getAntagonistState() {
+        float[] state = new float[antagonists.size() * 9];
+        for (int i = 0; i < antagonists.size(); i++) {
+            Antagonist foe = antagonists.get(i);
+            int offset = i * 9;
+            state[offset] = foe.spawnX;
+            state[offset + 1] = foe.x;
+            state[offset + 2] = foe.shotTimer;
+            state[offset + 3] = foe.direction;
+            state[offset + 4] = foe.directionTimer;
+            state[offset + 5] = foe.jumpTimer;
+            state[offset + 6] = foe.jumpOffset;
+            state[offset + 7] = foe.jumpVelocity;
+            state[offset + 8] = foe.behaviorStep;
         }
         return state;
     }
@@ -654,6 +836,42 @@ public final class RunnerEngine {
             state[i * 4 + 3] = shot.vy;
         }
         return state;
+    }
+    public float[] getColoredProjectileState() {
+        float[] state = new float[projectiles.size() * 5];
+        for (int i = 0; i < projectiles.size(); i++) {
+            Projectile shot = projectiles.get(i);
+            int offset = i * 5;
+            state[offset] = shot.x;
+            state[offset + 1] = shot.y;
+            state[offset + 2] = shot.vx;
+            state[offset + 3] = shot.vy;
+            state[offset + 4] = shot.type.ordinal();
+        }
+        return state;
+    }
+    public float[] getBonusPopupState() {
+        float[] state = new float[bonusPopups.size() * 5];
+        for (int i = 0; i < bonusPopups.size(); i++) {
+            BonusPopup popup = bonusPopups.get(i);
+            int offset = i * 5;
+            state[offset] = popup.x;
+            state[offset + 1] = popup.y;
+            state[offset + 2] = popup.amount;
+            state[offset + 3] = popup.type.ordinal();
+            state[offset + 4] = popup.remainingSeconds;
+        }
+        return state;
+    }
+    public void restoreBonusPopups(float[] state) {
+        bonusPopups.clear();
+        if (state == null) return;
+        for (int i = 0; i + 4 < state.length; i += 5) {
+            if (state[i + 4] <= 0f || state[i + 4] > BONUS_POPUP_SECONDS) continue;
+            EnemyType type = state[i + 3] == 1f ? EnemyType.MOVING : EnemyType.STATIONARY;
+            bonusPopups.add(new BonusPopup(state[i], state[i + 1],
+                    (int) state[i + 2], type, state[i + 4]));
+        }
     }
     public void loadBestDistance(int distance) { bestDistance = Math.max(0, distance); }
     public Mode getMode() { return mode; }
