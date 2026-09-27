@@ -237,6 +237,9 @@ public final class RunnerEngineChecks {
                 "vertical far lip costs one health point without restarting");
         check(game.getPlayerX() < dip.end() - RunnerEngine.PLAYER_WIDTH - 50f,
                 "far lip pushes the runner back for a jump");
+        check(Math.abs(dip.end() - RunnerEngine.PLAYER_WIDTH - game.getPlayerX()
+                        - regularJumpLength() / 2f) < 1.5f,
+                "vertical depression wall also pushes back half a jump");
         check(Math.abs(game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT -
                 (RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH)) < .1f,
                 "runner stands on the depression floor");
@@ -403,6 +406,9 @@ public final class RunnerEngineChecks {
         float stoppedX = game.getPlayerX();
         float stoppedY = game.getPlayerY();
         double stoppedTime = game.getElapsedRunSeconds();
+        float halfJump = regularJumpLength() / 2f;
+        check(Math.abs(wall.x - RunnerEngine.PLAYER_WIDTH - stoppedX - halfJump) < 1.5f,
+                "vertical wall sends the runner back half a regular jump's length");
         game.jump();
         check(game.getVelocityY() == 0f, "jump input is ignored during recoil hold");
 
@@ -452,6 +458,23 @@ public final class RunnerEngineChecks {
                         && Math.abs(restored.getSpeed() - previousSpeed) < .01f
                         && restored.getHealth() == RunnerEngine.MAX_HEALTH - 1,
                 "clearing the ledge restores the precise speed from before impact");
+    }
+
+    private static float regularJumpLength() {
+        RunnerEngine game = started(1L);
+        float before = game.getPlayerX();
+        game.jump();
+        for (int step = 0; step < 180; ++step) {
+            game.update(1f / 120f);
+            if (step > 0 && game.getVelocityY() == 0f
+                    && game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT == RunnerEngine.GROUND_Y) {
+                break;
+            }
+        }
+        check(game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT == RunnerEngine.GROUND_Y
+                        && game.getPlayerX() < game.getHazards().get(0).x,
+                "reference jump lands on clear ground");
+        return game.getPlayerX() - before;
     }
 
     private static float surfaceAt(RunnerEngine game, float x) {
@@ -538,6 +561,52 @@ public final class RunnerEngineChecks {
                 "enemies can appear on ground, ledges, depressions, and inclines");
     }
 
+    private static void testEnemyStomp() {
+        RunnerEngine stomp = enemyOnOpenGround(180f);
+        RunnerEngine.Antagonist foe = stomp.getAntagonists().stream()
+                .filter(e -> e.x > stomp.getPlayerX()).findFirst().get();
+        float startingSpeed = stomp.getSpeed();
+        stomp.jump();
+        float feetBeforeContact = Float.NaN;
+        float feetAfterContact = Float.NaN;
+        for (int step = 0; step < 150 && stomp.getDefeatedAntagonists().length == 0;
+                ++step) {
+            float previousFeet = stomp.getPlayerY() + RunnerEngine.PLAYER_HEIGHT;
+            stomp.update(1f / 120f);
+            if (stomp.getDefeatedAntagonists().length > 0) {
+                feetBeforeContact = previousFeet;
+                feetAfterContact = stomp.getPlayerY() + RunnerEngine.PLAYER_HEIGHT;
+            }
+        }
+        check(stomp.getAntagonists().stream().noneMatch(e -> e.x == foe.x)
+                        && stomp.getDefeatedAntagonists().length == 1,
+                "landing on an enemy removes it");
+        check(feetBeforeContact <= foe.y + RunnerEngine.PLAYER_HEIGHT / 4f
+                        && feetAfterContact >= foe.y + 5f,
+                "stomp crosses the enemy's upper quarter during a frame");
+        check(stomp.getHealth() == RunnerEngine.MAX_HEALTH
+                        && stomp.getDamageRecoverySeconds() == 0f
+                        && stomp.getRecoilHoldSeconds() == 0f
+                        && !stomp.isRecoveringSpeed()
+                        && stomp.getSpeed() == startingSpeed,
+                "stomp leaves health, movement, and speed unchanged");
+
+        RunnerEngine justBelow = enemyOnOpenGround(130f);
+        RunnerEngine.Antagonist lowerFoe = justBelow.getAntagonists().stream()
+                .filter(e -> e.x > justBelow.getPlayerX()).findFirst().get();
+        float initialX = lowerFoe.x - 25f;
+        float initialFeet = lowerFoe.y + RunnerEngine.PLAYER_HEIGHT / 4f + 1f;
+        justBelow.restore(justBelow.getSeed(), 1, initialX,
+                initialFeet - RunnerEngine.PLAYER_HEIGHT, 10f, 0f, 0d, 1f,
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        justBelow.continueGame();
+        justBelow.update(1f / 120f);
+        check(justBelow.getHealth() == RunnerEngine.MAX_HEALTH - 1
+                        && justBelow.getPlayerX() > initialX
+                        && justBelow.getAntagonists().stream().noneMatch(e -> e.x == lowerFoe.x),
+                "descending contact below the upper quarter still costs one health point");
+    }
+
     private static void testAntagonistAndProjectiles() {
         RunnerEngine game = enemyOnOpenGround(130f);
         float enemyX = game.getAntagonists().stream()
@@ -553,8 +622,10 @@ public final class RunnerEngineChecks {
                 step++) game.update(1f / 120f);
         check(game.getHealth() == RunnerEngine.MAX_HEALTH - 1 && game.getAttempts() == 1,
                 "touching a stationary oval takes one health point without restarting");
-        check(game.getPlayerX() < enemyX - RunnerEngine.PLAYER_WIDTH - 50f,
-                "oval impact leaves room to jump over it");
+        check(game.getPlayerX() > enemyX - RunnerEngine.PLAYER_WIDTH
+                        && game.getRecoilHoldSeconds() == 0f && !game.isRecoveringSpeed()
+                        && game.getSpeed() == previousSpeed,
+                "side contact leaves position and speed unchanged without a recoil hold");
         final float struckEnemyX = enemyX;
         check(game.getAntagonists().stream().noneMatch(e -> e.x == struckEnemyX)
                         && game.getDefeatedAntagonists().length == 1,
@@ -572,20 +643,16 @@ public final class RunnerEngineChecks {
         restoredHit.generateAhead(40_000f);
         check(restoredHit.getAntagonists().stream().noneMatch(e -> e.x == struckEnemyX),
                 "struck oval stays gone after activity restoration and level generation");
-        for (int step = 0; step < 62 && game.getRecoilHoldSeconds() > 0f; ++step) {
-            game.update(1f / 120f);
-        }
-        check(game.getSpeed() == RunnerEngine.BASE_SPEED,
-                "enemy recoil resumes at the original starting speed");
         game.jump();
+        check(game.getVelocityY() < 0f, "jump stays available immediately after an enemy hit");
         for (int step = 0; step < 120 && game.getPlayerX() < enemyX + 50f;
                 step++) game.update(1f / 120f);
         check(game.getPlayerX() > enemyX + 40f && game.getAttempts() == 1
                         && game.getHealth() == RunnerEngine.MAX_HEALTH - 1,
-                "well timed jump clears the oval after recoil");
+                "runner keeps moving after a damaging enemy hit");
         check(!game.isRecoveringSpeed()
                         && Math.abs(game.getSpeed() - previousSpeed) < .01f,
-                "passing the oval restores the earlier speed");
+                "enemy contact does not reset the runner's speed");
 
         RunnerEngine shooter = enemyOnOpenGround(330f);
         enemyX = shooter.getAntagonists().stream()
@@ -731,6 +798,7 @@ public final class RunnerEngineChecks {
         testSpeedAndManualPause();
         testWallRecoilSpeedRecovery();
         testAntagonistGeneration();
+        testEnemyStomp();
         testAntagonistAndProjectiles();
         testProjectileTerrainCollisions();
         testLongerCourses();
