@@ -37,10 +37,10 @@ public final class RunnerEngine {
     private static final float JUMP_VELOCITY = -490f;
     private static final float ENEMY_JUMP_VELOCITY =
             JUMP_VELOCITY * .4472136f; // sqrt(.2): 20% of the player's jump height.
-    private static final float THIRTY_DEGREE_RUN = 1.7320508f;
-    private static final float SLOPE_RECOVERY_PER_SECOND = .25f;
+    private static final float SLOPE_GRAVITY_RESPONSE_SECONDS = .12f;
+    private static final float SLOPE_MOMENTUM_SECONDS = .07f;
+    private static final float SLOPE_RECOVERY_PER_SECOND = 1.5f;
     private static final HazardType[] HAZARD_TYPES = HazardType.values();
-    private static final int[] EDGE_ANGLES = {0, 30, 45};
 
     public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER }
     public enum HazardType { HOLE, WALL, DIP }
@@ -72,11 +72,11 @@ public final class RunnerEngine {
         public float surfaceYAt(float worldX) {
             if (type == HazardType.HOLE) return Float.NaN;
             float change = type == HazardType.WALL ? -LEDGE_HEIGHT : DIP_DEPTH;
-            if (worldX < flatStart && entranceDegrees != 0) {
+            if (worldX < flatStart && entranceDegrees != 90) {
                 return GROUND_Y + change * (worldX - x) / (flatStart - x);
             }
             if (worldX < flatEnd) return GROUND_Y + change;
-            if (worldX < end() && exitDegrees != 0) {
+            if (worldX < end() && exitDegrees != 90) {
                 return GROUND_Y + change * (end() - worldX) / (end() - flatEnd);
             }
             return GROUND_Y;
@@ -85,18 +85,18 @@ public final class RunnerEngine {
         /** Positive means uphill, negative means downhill as the runner moves right. */
         public int slopeDegreesAt(float worldX) {
             if (worldX < x || worldX >= end()) return 0;
-            if (worldX < flatStart && entranceDegrees != 0) {
+            if (worldX < flatStart && entranceDegrees != 90) {
                 return type == HazardType.WALL ? entranceDegrees : -entranceDegrees;
             }
-            if (worldX >= flatEnd && worldX < end() && exitDegrees != 0) {
+            if (worldX >= flatEnd && worldX < end() && exitDegrees != 90) {
                 return type == HazardType.WALL ? -exitDegrees : exitDegrees;
             }
             return 0;
         }
 
         private static float rampRun(float height, int degrees) {
-            if (degrees == 30) return height * THIRTY_DEGREE_RUN;
-            return degrees == 45 ? height : 0f;
+            return degrees == 90 ? 0f
+                    : (float) (height / Math.tan(Math.toRadians(degrees)));
         }
     }
 
@@ -182,6 +182,7 @@ public final class RunnerEngine {
     private float countdownSeconds;
     private double elapsedRunSeconds;
     private float terrainSpeedMultiplier = 1f;
+    private boolean waitingForJump;
     private int bestDistance;
     private Mode mode = Mode.TITLE;
     private Mode resumeMode = Mode.RUNNING;
@@ -220,6 +221,7 @@ public final class RunnerEngine {
         damageRecoverySeconds = 0f;
         elapsedRunSeconds = 0d;
         terrainSpeedMultiplier = 1f;
+        waitingForJump = false;
         generateAhead(1800f);
     }
 
@@ -234,8 +236,9 @@ public final class RunnerEngine {
             } else {
                 flatWidth = 155f + random.nextInt(31);
             }
-            int entrance = type == HazardType.HOLE ? 0 : EDGE_ANGLES[random.nextInt(3)];
-            int exit = type == HazardType.HOLE ? 0 : EDGE_ANGLES[random.nextInt(3)];
+            // A finite height change needs a nonzero angle; flat ground provides 0°.
+            int entrance = type == HazardType.HOLE ? 90 : 1 + random.nextInt(90);
+            int exit = type == HazardType.HOLE ? 90 : 1 + random.nextInt(90);
             Hazard hazard = new Hazard(type, nextHazardX, flatWidth, entrance, exit);
             hazards.add(hazard);
             // Clear ground between hazards leaves time for a fresh jump.
@@ -281,6 +284,10 @@ public final class RunnerEngine {
         if (mode == Mode.RUNNING && isStanding()) {
             velocityY = JUMP_VELOCITY;
             controlledJumpInProgress = true;
+            if (waitingForJump || terrainSpeedMultiplier < 0f) {
+                waitingForJump = false;
+                terrainSpeedMultiplier = 1f;
+            }
         }
     }
 
@@ -337,38 +344,19 @@ public final class RunnerEngine {
         adjustSlopeSpeed(dt, wasStanding, oldX + PLAYER_WIDTH / 2f);
         float pace = getBaseSpeed() / BASE_SPEED;
         playerX += getSpeed() * dt;
-        farthestX = Math.max(farthestX, playerX);
         playerY += velocityY * pace * dt + .5f * GRAVITY * pace * pace * dt * dt;
         velocityY += GRAVITY * pace * dt;
-
-        // A vertical face costs a life; the next life resumes farther back.
-        for (Hazard hazard : hazards) {
-            if (hazard.type == HazardType.DIP && hazard.exitDegrees == 0
-                    && playerX < hazard.end()
-                    && playerX + PLAYER_WIDTH > hazard.end()
-                    && playerY + PLAYER_HEIGHT > GROUND_Y + 1f
-                    && playerY < GROUND_Y + DIP_DEPTH) {
-                loseLife();
-                return true;
-            }
-        }
-
-        float feet = playerY + PLAYER_HEIGHT;
-        for (Hazard hazard : hazards) {
-            if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 0
-                    && playerX < hazard.x && playerX + PLAYER_WIDTH > hazard.x
-                    && feet > GROUND_Y - LEDGE_HEIGHT + 1f && playerY < GROUND_Y) {
-                loseLife();
-                return true;
-            }
-        }
+        stopAtVerticalFace(oldX, wasStanding);
+        if (!waitingForJump && wasStanding) stopAtSlopeFoot(oldX);
+        farthestX = Math.max(farthestX, playerX);
 
         // A jump can land on the near edge before the runner's center reaches it.
         boolean landed = false;
+        float feet = playerY + PLAYER_HEIGHT;
         if (velocityY >= 0f && oldFeet <= GROUND_Y - LEDGE_HEIGHT + 1f
                 && feet >= GROUND_Y - LEDGE_HEIGHT) {
             for (Hazard hazard : hazards) {
-                if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 0
+                if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 90
                         && playerX < hazard.flatEnd
                         && playerX + PLAYER_WIDTH > hazard.x) {
                     landAt(GROUND_Y - LEDGE_HEIGHT);
@@ -380,9 +368,13 @@ public final class RunnerEngine {
 
         if (!landed) {
             float surface = surfaceYForPlayer(playerX, oldFeet);
-            float dx = Math.max(0f, playerX - oldX);
+            float dx = Math.abs(playerX - oldX);
+            int slope = Math.max(Math.abs(slopeDegreesAt(oldX + PLAYER_WIDTH / 2f)),
+                    Math.abs(slopeDegreesAt(playerX + PLAYER_WIDTH / 2f)));
+            float risePerUnit = slope == 90 ? 1.02f
+                    : Math.max(1.02f, (float) Math.tan(Math.toRadians(slope)));
             boolean continuous = !Float.isNaN(oldSurface) && !Float.isNaN(surface)
-                    && Math.abs(surface - oldSurface) <= dx * 1.02f + .8f;
+                    && Math.abs(surface - oldSurface) <= dx * risePerUnit + .8f;
             if (wasStanding && continuous) {
                 // Grounded movement follows uphill and downhill planes.
                 landAt(surface);
@@ -421,6 +413,67 @@ public final class RunnerEngine {
         if (updateProjectiles(dt)) return true;
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
+    }
+
+    private void stopAtVerticalFace(float oldX, boolean wasStanding) {
+        if (playerX <= oldX) return;
+        for (Hazard hazard : hazards) {
+            float face;
+            float top;
+            // Very narrow ramps act as faces at the runner's scale.
+            if (hazard.type == HazardType.WALL
+                    && hazard.flatStart - hazard.x < 10f) {
+                face = hazard.x;
+                top = GROUND_Y - LEDGE_HEIGHT;
+            } else if (hazard.type == HazardType.DIP
+                    && hazard.end() - hazard.flatEnd < 10f) {
+                face = hazard.flatEnd;
+                top = GROUND_Y;
+            } else continue;
+            if (oldX < face && playerX + PLAYER_WIDTH > face
+                    && playerY + PLAYER_HEIGHT > top + 1f
+                    && playerY < top + (hazard.type == HazardType.WALL
+                    ? LEDGE_HEIGHT : DIP_DEPTH)) {
+                playerX = face - PLAYER_WIDTH;
+                if (wasStanding) stopUntilJump(hazard.type == HazardType.WALL
+                        ? GROUND_Y : GROUND_Y + DIP_DEPTH);
+                return;
+            }
+        }
+    }
+
+    private void stopAtSlopeFoot(float oldX) {
+        float oldCenter = oldX + PLAYER_WIDTH / 2f;
+        float newCenter = playerX + PLAYER_WIDTH / 2f;
+        for (Hazard hazard : hazards) {
+            float start;
+            float end;
+            float ground;
+            if (hazard.type == HazardType.WALL && hazard.entranceDegrees < 90) {
+                start = hazard.x;
+                end = hazard.flatStart;
+                ground = GROUND_Y;
+            } else if (hazard.type == HazardType.DIP && hazard.exitDegrees < 90) {
+                start = hazard.flatEnd;
+                end = hazard.end();
+                ground = GROUND_Y + DIP_DEPTH;
+            } else continue;
+            boolean skippedRamp = playerX > oldX && oldCenter < end && newCenter >= end
+                    && (oldCenter <= start || end - start < PLAYER_WIDTH / 2f);
+            boolean slidOff = playerX < oldX && oldCenter >= start
+                    && oldCenter < end && newCenter <= start;
+            if (skippedRamp || slidOff) {
+                playerX = start - PLAYER_WIDTH / 2f;
+                stopUntilJump(ground);
+                return;
+            }
+        }
+    }
+
+    private void stopUntilJump(float surface) {
+        landAt(surface);
+        waitingForJump = true;
+        terrainSpeedMultiplier = 0f;
     }
 
     private void updateMovingEnemies(float dt) {
@@ -559,7 +612,7 @@ public final class RunnerEngine {
     private float surfaceYForPlayer(float left, float feet) {
         float center = left + PLAYER_WIDTH / 2f;
         for (Hazard hazard : hazards) {
-            if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 0
+            if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 90
                     && left < hazard.x && left + PLAYER_WIDTH > hazard.x
                     && feet <= GROUND_Y - LEDGE_HEIGHT + 1.2f) {
                 return GROUND_Y - LEDGE_HEIGHT;
@@ -569,20 +622,29 @@ public final class RunnerEngine {
         return surfaceYAt(center);
     }
 
-    private void adjustSlopeSpeed(float dt, boolean grounded, float center) {
-        int slope = 0;
-        if (grounded) {
-            for (Hazard hazard : hazards) {
-                if (center < hazard.x) break;
-                if (center < hazard.end()) {
-                    slope = hazard.slopeDegreesAt(center);
-                    break;
-                }
-            }
+    private int slopeDegreesAt(float center) {
+        for (Hazard hazard : hazards) {
+            if (center < hazard.x) break;
+            if (center < hazard.end()) return hazard.slopeDegreesAt(center);
         }
+        return 0;
+    }
+
+    private void adjustSlopeSpeed(float dt, boolean grounded, float center) {
+        if (waitingForJump) {
+            terrainSpeedMultiplier = 0f;
+            return;
+        }
+        int slope = grounded ? slopeDegreesAt(center) : 0;
         if (slope != 0) {
-            float change = Math.abs(slope) == 30 ? .12f : .20f;
-            terrainSpeedMultiplier = slope > 0 ? 1f - change : 1f + change;
+            double angle = Math.toRadians(Math.abs(slope));
+            float gravityEffect = GRAVITY * SLOPE_GRAVITY_RESPONSE_SECONDS
+                    / getBaseSpeed() * (float) Math.sin(angle);
+            float target = slope > 0
+                    ? (float) Math.cos(angle) - gravityEffect
+                    : 1f + gravityEffect;
+            float response = 1f - (float) Math.exp(-dt / SLOPE_MOMENTUM_SECONDS);
+            terrainSpeedMultiplier += (target - terrainSpeedMultiplier) * response;
         } else if (terrainSpeedMultiplier < 1f) {
             terrainSpeedMultiplier = Math.min(1f,
                     terrainSpeedMultiplier + SLOPE_RECOVERY_PER_SECOND * dt);
@@ -606,6 +668,7 @@ public final class RunnerEngine {
         health = MAX_HEALTH;
         damageRecoverySeconds = 0f;
         terrainSpeedMultiplier = 1f;
+        waitingForJump = false;
         countdownSeconds = 3f;
         mode = Mode.COUNTDOWN;
     }
@@ -626,9 +689,9 @@ public final class RunnerEngine {
             if (hazard.x > ahead) break;
             if (hazard.type == HazardType.HOLE && hazard.end() > x
                     && hazard.x < ahead) return false;
-            if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 0
+            if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 90
                     && hazard.x > x && hazard.x < ahead) return false;
-            if (hazard.type == HazardType.DIP && hazard.exitDegrees == 0
+            if (hazard.type == HazardType.DIP && hazard.exitDegrees == 90
                     && hazard.end() > x && hazard.end() < ahead
                     && center >= hazard.x) return false;
         }
@@ -728,7 +791,7 @@ public final class RunnerEngine {
         damageRecoverySeconds = Math.max(0f, savedDamageRecovery);
         countdownSeconds = remainingSeconds;
         elapsedRunSeconds = Math.max(0d, savedRunSeconds);
-        terrainSpeedMultiplier = Math.max(.8f, Math.min(1.2f, savedTerrainMultiplier));
+        terrainSpeedMultiplier = Math.max(-.75f, Math.min(1.75f, savedTerrainMultiplier));
         if (savedDefeatedAntagonists != null) {
             for (float enemyX : savedDefeatedAntagonists) {
                 if (!Float.isNaN(enemyX) && !Float.isInfinite(enemyX)) {
@@ -891,6 +954,11 @@ public final class RunnerEngine {
     public float getCountdownSeconds() { return countdownSeconds; }
     public double getElapsedRunSeconds() { return elapsedRunSeconds; }
     public float getTerrainSpeedMultiplier() { return terrainSpeedMultiplier; }
+    public boolean isWaitingForJump() { return waitingForJump; }
+    public void restoreTerrainStop(boolean stopped) {
+        waitingForJump = stopped;
+        if (stopped) terrainSpeedMultiplier = 0f;
+    }
     public float getBaseSpeed() {
         return BASE_SPEED + SPEED_STEP
                 * (int) Math.floor((elapsedRunSeconds + .000001d) / SPEED_INTERVAL_SECONDS);

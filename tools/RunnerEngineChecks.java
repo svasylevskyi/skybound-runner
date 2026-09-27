@@ -48,8 +48,9 @@ public final class RunnerEngineChecks {
     }
 
     private static void testLayout() {
-        boolean sawThirty = false;
-        boolean sawFortyFive = false;
+        boolean sawGentle = false;
+        boolean sawModerate = false;
+        boolean sawSteep = false;
         boolean sawVertical = false;
         for (long seed = 0; seed < 100; ++seed) {
             RunnerEngine game = started(seed);
@@ -57,33 +58,36 @@ public final class RunnerEngineChecks {
             float previousEnd = -1000f;
             for (RunnerEngine.Hazard hazard : game.getHazards()) {
                 check(hazard.x - previousEnd >= 289f, "hazards have recovery room");
-                check(hazard.width <= 390f, "obstacles remain spaced and bounded");
+                check(hazard.width <= 8000f, "shallow ramps remain finite");
                 check(hazard.x <= hazard.flatStart && hazard.flatStart < hazard.flatEnd
                         && hazard.flatEnd <= hazard.end(), "ramp and flat sections are ordered");
                 if (hazard.type != RunnerEngine.HazardType.HOLE) {
                     float height = hazard.type == RunnerEngine.HazardType.WALL
                             ? RunnerEngine.LEDGE_HEIGHT : RunnerEngine.DIP_DEPTH;
+                    check(hazard.entranceDegrees >= 1 && hazard.entranceDegrees <= 90
+                                    && hazard.exitDegrees >= 1 && hazard.exitDegrees <= 90,
+                            "height-changing edges range from 1 to 90 degrees");
                     check(Math.abs(hazard.flatStart - hazard.x -
-                            horizontalRun(height, hazard.entranceDegrees)) < .02f,
+                            horizontalRun(height, hazard.entranceDegrees)) < .12f,
                             "entrance has its stated incline");
                     check(Math.abs(hazard.end() - hazard.flatEnd -
-                            horizontalRun(height, hazard.exitDegrees)) < .02f,
+                            horizontalRun(height, hazard.exitDegrees)) < .12f,
                             "exit has its stated incline");
-                    sawThirty |= hazard.entranceDegrees == 30 || hazard.exitDegrees == 30;
-                    sawFortyFive |= hazard.entranceDegrees == 45 || hazard.exitDegrees == 45;
-                    sawVertical |= hazard.entranceDegrees == 0 || hazard.exitDegrees == 0;
+                    sawGentle |= hazard.entranceDegrees <= 10 || hazard.exitDegrees <= 10;
+                    sawModerate |= hazard.entranceDegrees >= 25 && hazard.entranceDegrees <= 55;
+                    sawSteep |= hazard.entranceDegrees >= 70 && hazard.entranceDegrees < 90;
+                    sawVertical |= hazard.entranceDegrees == 90 || hazard.exitDegrees == 90;
                 }
                 previousEnd = hazard.end();
             }
         }
-        check(sawThirty && sawFortyFive && sawVertical,
-                "generation includes both slope angles and right angle edges");
+        check(sawGentle && sawModerate && sawSteep && sawVertical,
+                "generation includes gentle, moderate, steep and vertical edges");
     }
 
     private static float horizontalRun(float height, int degrees) {
-        if (degrees == 30) return (float) (height / Math.tan(Math.PI / 6d));
-        if (degrees == 45) return height;
-        return 0f;
+        return degrees == 90 ? 0f
+                : (float) (height / Math.tan(Math.toRadians(degrees)));
     }
 
     private static void testFirstHazards() {
@@ -98,14 +102,15 @@ public final class RunnerEngineChecks {
             sawWall |= first.type == RunnerEngine.HazardType.WALL;
             sawDip |= first.type == RunnerEngine.HazardType.DIP;
             boolean jumped = false;
-            for (int step = 0; step < 1500 && game.getPlayerX() < first.end() + 50f; ++step) {
+            for (int step = 0; step < 7000 && game.getPlayerX() < first.end() + 50f; ++step) {
+                if (game.isWaitingForJump()) game.jump();
                 if (first.type != RunnerEngine.HazardType.DIP && !jumped
                         && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= first.x - jumpLead(first.type)) {
                     game.jump();
                     jumped = true;
                 }
-                if (first.type == RunnerEngine.HazardType.DIP && first.exitDegrees == 0
+                if (first.type == RunnerEngine.HazardType.DIP && first.exitDegrees == 90
                         && !jumped && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= first.end() - 120f
                         && game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
@@ -124,7 +129,7 @@ public final class RunnerEngineChecks {
                             "timed jump avoids damage on a ledge or hole: seed=" + seed);
                 }
             }
-            if (first.type != RunnerEngine.HazardType.DIP || first.exitDegrees == 0) {
+            if (first.type != RunnerEngine.HazardType.DIP || first.exitDegrees == 90) {
                 check(jumped, "jump was exercised where needed");
             }
             check(game.getPlayerX() > first.end() + 50f, "first obstacle cleared");
@@ -139,35 +144,41 @@ public final class RunnerEngineChecks {
     }
 
     private static long seedFor(RunnerEngine.HazardType type) {
-        for (long trial = 0; trial < 200; ++trial) {
+        for (long trial = 0; trial < 3000; ++trial) {
             long seed = trial * 0x9E3779B97F4A7C15L;
             RunnerEngine game = started(seed);
             if (game.getHazards().get(0).type == type
                     && (type != RunnerEngine.HazardType.DIP
-                    || game.getHazards().get(0).exitDegrees == 0)) return seed;
+                    || game.getHazards().get(0).exitDegrees == 90)) return seed;
         }
         throw new AssertionError("no generated " + type);
     }
 
-    private static long seedForTwoFailures() {
-        for (long trial = 0; trial < 200; ++trial) {
+    private static long seedForBlockingWall() {
+        return seedForSlopes(RunnerEngine.HazardType.WALL, 90, -1);
+    }
+
+    private static long seedForSteepWall(int minAngle, int maxAngle) {
+        for (long trial = 0; trial < 3000; ++trial) {
             long seed = trial * 0x9E3779B97F4A7C15L;
-            RunnerEngine game = started(seed);
-            RunnerEngine.Hazard first = game.getHazards().get(0);
-            RunnerEngine.Hazard second = game.getHazards().get(1);
-            if (first.type == RunnerEngine.HazardType.WALL && first.entranceDegrees == 0
-                    && second.type == RunnerEngine.HazardType.HOLE) return seed;
+            RunnerEngine.Hazard first = started(seed).getHazards().get(0);
+            if (first.type == RunnerEngine.HazardType.WALL
+                    && first.entranceDegrees >= minAngle
+                    && first.entranceDegrees <= maxAngle) return seed;
         }
-        throw new AssertionError("no suitable course for score checks");
+        throw new AssertionError("no wall between " + minAngle + " and " + maxAngle + " degrees");
     }
 
     private static long seedForSlopes(RunnerEngine.HazardType type,
                                       int entrance, int exit) {
-        for (long trial = 0; trial < 1000; ++trial) {
+        for (long trial = 0; trial < 10000; ++trial) {
             long seed = trial * 0x9E3779B97F4A7C15L;
             RunnerEngine.Hazard first = started(seed).getHazards().get(0);
-            if (first.type == type && first.entranceDegrees == entrance
-                    && first.exitDegrees == exit) return seed;
+            boolean entryMatches = entrance == 90 ? first.entranceDegrees == 90
+                    : Math.abs(first.entranceDegrees - entrance) <= 8;
+            boolean exitMatches = exit < 0 || (exit == 90 ? first.exitDegrees == 90
+                    : Math.abs(first.exitDegrees - exit) <= 8);
+            if (first.type == type && entryMatches && exitMatches) return seed;
         }
         throw new AssertionError("no course with " + type + " " + entrance + "/" + exit);
     }
@@ -180,6 +191,7 @@ public final class RunnerEngineChecks {
         boolean enteredLastSlope = false;
         boolean sawRecovery = false;
         boolean sawBaseAgain = false;
+        float initialRecoveryDeviation = Float.NaN;
         for (int step = 0; step < 1500 && !sawBaseAgain; ++step) {
             game.update(1f / 120f);
             check(game.getLives() == RunnerEngine.MAX_LIVES, "sloped " + type + " traversed without damage");
@@ -205,12 +217,16 @@ public final class RunnerEngineChecks {
                 }
                 enteredLastSlope = true;
             }
+            if (center > first.end() + 5f && center < first.end() + 30f
+                    && Float.isNaN(initialRecoveryDeviation)) {
+                initialRecoveryDeviation = Math.abs(game.getSpeed() - game.getBaseSpeed());
+                check(initialRecoveryDeviation > .01f,
+                        "slope speed persists briefly beyond the incline");
+            }
             if (center > first.end() + 60f && center < first.end() + 100f) {
-                check(Math.abs(game.getSpeed() - game.getBaseSpeed()) > .01f,
-                        "slope effect remains briefly after the incline");
                 check(Math.abs(game.getSpeed() - game.getBaseSpeed())
-                        < game.getBaseSpeed() * .20f,
-                        "slope effect gradually decays");
+                                <= initialRecoveryDeviation + .01f,
+                        "slope effect decays toward base speed");
                 sawRecovery = true;
             }
             if (center > first.end() + 220f) {
@@ -231,7 +247,7 @@ public final class RunnerEngineChecks {
         checkSlopeRun(RunnerEngine.HazardType.DIP, 30, 45);
         checkSlopeRun(RunnerEngine.HazardType.DIP, 45, 30);
 
-        RunnerEngine verticalEntry = started(seedForSlopes(RunnerEngine.HazardType.DIP, 0, 30));
+        RunnerEngine verticalEntry = started(seedForSlopes(RunnerEngine.HazardType.DIP, 90, 30));
         RunnerEngine.Hazard dip = verticalEntry.getHazards().get(0);
         boolean climbedOut = false;
         for (int step = 0; step < 1500 && !climbedOut; ++step) {
@@ -266,18 +282,78 @@ public final class RunnerEngineChecks {
         check(restored.getLives() == RunnerEngine.MAX_LIVES, "restored slope can be continued");
     }
 
+    private static void testSteepSlopeSlideAndJump() {
+        RunnerEngine game = started(seedForSteepWall(70, 78));
+        RunnerEngine.Hazard ledge = game.getHazards().get(0);
+        boolean slidBackward = false;
+        boolean restoredSlide = false;
+        for (int step = 0; step < 2000 && !game.isWaitingForJump(); step++) {
+            float beforeX = game.getPlayerX();
+            game.update(1f / 120f);
+            if (game.getSpeed() < 0f) {
+                slidBackward = true;
+                check(game.getPlayerX() < beforeX,
+                        "steep uphill reverses horizontal movement");
+                if (!restoredSlide) {
+                    RunnerEngine resumed = new RunnerEngine();
+                    resumed.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
+                            game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                            game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                            game.getMode(), game.getResumeMode());
+                    check(resumed.getSpeed() < 0f && resumed.getMode() == RunnerEngine.Mode.PAUSED,
+                            "paused run retains a backward slope speed");
+                    float savedX = resumed.getPlayerX();
+                    resumed.continueGame();
+                    resumed.update(1f / 120f);
+                    check(resumed.getPlayerX() < savedX,
+                            "restored runner keeps sliding until reaching the foot");
+                    restoredSlide = true;
+                }
+            }
+        }
+        check(slidBackward && restoredSlide && game.isWaitingForJump()
+                        && game.getSpeed() == 0f
+                        && game.getLives() == RunnerEngine.MAX_LIVES
+                        && game.getHealth() == RunnerEngine.MAX_HEALTH
+                        && Math.abs(game.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f
+                        - ledge.x) < .1f,
+                "runner slides back to the foot and waits there without damage");
+        game.jump();
+        for (int step = 0; step < 180 && game.getPlayerX() <= ledge.flatStart + 10f;
+                step++) game.update(1f / 120f);
+        check(game.getPlayerX() > ledge.flatStart + 10f
+                        && game.getLives() == RunnerEngine.MAX_LIVES,
+                "jump from the stopped slope reaches the elevated surface");
+
+        RunnerEngine nearVertical = started(seedForSteepWall(88, 89));
+        RunnerEngine.Hazard narrow = nearVertical.getHazards().get(0);
+        for (int step = 0; step < 1000 && !nearVertical.isWaitingForJump(); step++) {
+            nearVertical.update(1f / 120f);
+        }
+        check(nearVertical.isWaitingForJump()
+                        && nearVertical.getPlayerX() <= narrow.flatStart
+                        && nearVertical.getLives() == RunnerEngine.MAX_LIVES,
+                "near-vertical ramp cannot be crossed in one update step");
+    }
+
     private static void testDepression() {
         RunnerEngine game = started(seedFor(RunnerEngine.HazardType.DIP));
         RunnerEngine.Hazard dip = game.getHazards().get(0);
-        for (int step = 0; step < 1000 && game.getLives() == RunnerEngine.MAX_LIVES;
+        for (int step = 0; step < 5000 && !game.isWaitingForJump();
                 ++step) game.update(1f / 120f);
-        check(game.getLives() == RunnerEngine.MAX_LIVES - 1
-                        && game.getMode() == RunnerEngine.Mode.COUNTDOWN
-                        && game.getHealth() == RunnerEngine.MAX_HEALTH,
-                "vertical depression wall costs one life and begins countdown");
-        check(game.getFarthestX() > dip.x
-                        && Math.abs(game.getFarthestX() - game.getPlayerX() - 500f) < .1f,
-                "depression collision respawns 50 metres behind the hit");
+        check(game.isWaitingForJump() && game.getLives() == RunnerEngine.MAX_LIVES
+                        && game.getMode() == RunnerEngine.Mode.RUNNING
+                        && game.getHealth() == RunnerEngine.MAX_HEALTH
+                        && game.getSpeed() == 0f
+                        && Math.abs(game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
+                        - dip.end()) < .1f,
+                "vertical depression wall stops the runner without damage");
+        game.jump();
+        for (int step = 0; step < 200 && game.getPlayerX() <= dip.end() + 10f;
+                ++step) game.update(1f / 120f);
+        check(game.getPlayerX() > dip.end() + 10f
+                        && game.getLives() == RunnerEngine.MAX_LIVES,
+                "jump from depression wall clears the obstacle");
     }
 
     private static void testHoleAndExhaustedHealth() {
@@ -346,8 +422,8 @@ public final class RunnerEngineChecks {
     }
 
     private static void testFailureAndPause() {
-        RunnerEngine game = started(seedForTwoFailures());
-        RunnerEngine.Hazard wall = game.getHazards().get(0);
+        RunnerEngine game = started(seedFor(RunnerEngine.HazardType.HOLE));
+        RunnerEngine.Hazard hole = game.getHazards().get(0);
         game.loadBestDistance(25);
         for (int i = 0; i < 600 && game.getLives() == RunnerEngine.MAX_LIVES; ++i) {
             game.update(1f / 60f);
@@ -355,9 +431,9 @@ public final class RunnerEngineChecks {
         check(game.getLives() == RunnerEngine.MAX_LIVES - 1
                         && game.getHealth() == RunnerEngine.MAX_HEALTH
                         && game.getMode() == RunnerEngine.Mode.COUNTDOWN,
-                "wall collision costs one life and restores full health");
-        check(game.getPlayerX() < wall.x - RunnerEngine.PLAYER_WIDTH - 400f,
-                "wall collision sends runner back about 50 metres");
+                "falling through a hole costs one life and restores full health");
+        check(game.getPlayerX() < hole.x - 350f,
+                "falling through a hole sends the runner back about 50 metres");
         int farthest = game.getDistance();
         check(game.getBestDistance() == 25 && farthest > 25,
                 "life loss does not record a new high score before game over");
@@ -399,7 +475,7 @@ public final class RunnerEngineChecks {
             for (int step = 0; step < 1500 && game.getMode() == RunnerEngine.Mode.RUNNING;
                     ++step) game.update(1f / 120f);
             check(game.getLives() == before - 1,
-                    "each collision with the wall costs exactly one life");
+                    "each unavoided hole costs exactly one life");
             if (game.getLives() > 0) {
                 check(game.getMode() == RunnerEngine.Mode.COUNTDOWN
                                 && game.getBestDistance() == 25,
@@ -449,12 +525,12 @@ public final class RunnerEngineChecks {
                         && game.getSeed() == 456L,
                 "Restart starts a new course with five lives while retaining the best score");
 
-        RunnerEngine lowerScore = started(seedForTwoFailures());
+        RunnerEngine lowerScore = started(seedFor(RunnerEngine.HazardType.HOLE));
         lowerScore.loadBestDistance(999);
-        float wallFace = lowerScore.getHazards().get(0).x;
+        RunnerEngine.Hazard lowerHole = lowerScore.getHazards().get(0);
         lowerScore.restore(lowerScore.getSeed(), 1,
-                wallFace - RunnerEngine.PLAYER_WIDTH - 1f,
-                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                lowerHole.x + lowerHole.width / 2f,
+                RunnerEngine.GROUND_Y + 75f - RunnerEngine.PLAYER_HEIGHT,
                 0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
         lowerScore.continueGame();
         lowerScore.update(1f / 120f);
@@ -491,8 +567,8 @@ public final class RunnerEngineChecks {
         check(game.getSpeed() > speed, "another increase occurs after six seconds");
     }
 
-    private static void testWallLifeLossAndCountdown() {
-        long seed = seedForSlopes(RunnerEngine.HazardType.WALL, 0, 0);
+    private static void testWallStopAndJump() {
+        long seed = seedForBlockingWall();
         RunnerEngine game = started(seed);
         RunnerEngine.Hazard wall = game.getHazards().get(0);
         game.restore(seed, RunnerEngine.MAX_LIVES, wall.x - RunnerEngine.PLAYER_WIDTH - 1f,
@@ -502,25 +578,37 @@ public final class RunnerEngineChecks {
         float previousSpeed = game.getSpeed();
         check(previousSpeed > RunnerEngine.BASE_SPEED, "wall approached at increased speed");
         game.update(1f / 120f);
-        check(game.getLives() == RunnerEngine.MAX_LIVES - 1
-                        && game.getMode() == RunnerEngine.Mode.COUNTDOWN
-                        && game.getHealth() == RunnerEngine.MAX_HEALTH,
-                "vertical wall costs a life and refills health");
-        check(Math.abs(game.getFarthestX() - game.getPlayerX() - 500f) < .1f
-                        && game.getPlayerX() > 140f,
-                "wall respawn moves exactly 50 metres back when ground is clear");
-        check(game.getElapsedRunSeconds() == 8d
-                        && game.getSpeed() == previousSpeed
-                        && game.getBestDistance() == 0,
-                "life loss preserves speed progression and records no score yet");
-        float respawnX = game.getPlayerX();
-        game.update(2f);
-        check(game.getMode() == RunnerEngine.Mode.COUNTDOWN
-                        && game.getPlayerX() == respawnX,
-                "respawn waits through the three-second countdown");
-        game.update(1f);
-        check(game.getMode() == RunnerEngine.Mode.RUNNING,
-                "runner resumes automatically after countdown");
+        check(game.getLives() == RunnerEngine.MAX_LIVES
+                        && game.getMode() == RunnerEngine.Mode.RUNNING
+                        && game.getHealth() == RunnerEngine.MAX_HEALTH
+                        && game.isWaitingForJump() && game.getSpeed() == 0f
+                        && Math.abs(game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
+                        - wall.x) < .1f,
+                "vertical ledge face stops the runner without health or life loss");
+        float stoppedX = game.getPlayerX();
+        double stoppedTime = game.getElapsedRunSeconds();
+        game.update(.05f);
+        check(game.getPlayerX() == stoppedX && game.getElapsedRunSeconds() == stoppedTime,
+                "runner waits at the face until the player jumps");
+        game.pauseForBackground();
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
+                game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                game.getMode(), game.getResumeMode());
+        restored.restoreTerrainStop(game.isWaitingForJump());
+        restored.continueGame();
+        check(restored.isWaitingForJump() && restored.getSpeed() == 0f,
+                "wall stop survives pause and activity recreation");
+        restored.jump();
+        check(restored.getVelocityY() < 0f && restored.getSpeed() > 0f,
+                "jump from the wall restores forward movement");
+        for (int step = 0; step < 180 && restored.getPlayerX() <= wall.x + 10f;
+                ++step) restored.update(1f / 120f);
+        check(restored.getPlayerX() > wall.x + 10f
+                        && restored.getLives() == RunnerEngine.MAX_LIVES
+                        && restored.getHealth() == RunnerEngine.MAX_HEALTH,
+                "jump clears the vertical ledge without damage");
     }
 
     private static float surfaceAt(RunnerEngine game, float x) {
@@ -1035,7 +1123,7 @@ public final class RunnerEngineChecks {
     }
 
     private static void testProjectileTerrainCollisions() {
-        long verticalSeed = seedForSlopes(RunnerEngine.HazardType.WALL, 0, 0);
+        long verticalSeed = seedForBlockingWall();
         RunnerEngine vertical = started(verticalSeed);
         float verticalEdge = vertical.getHazards().get(0).end();
         checkTerrainAbsorbsShot(withProjectile(verticalSeed, verticalEdge + 25f,
@@ -1047,7 +1135,7 @@ public final class RunnerEngineChecks {
         checkTerrainAbsorbsShot(withProjectile(slopeSeed, slopeEdge + 25f,
                 RunnerEngine.GROUND_Y - 24f), "45-degree ledge slope");
 
-        long dipSeed = seedForSlopes(RunnerEngine.HazardType.DIP, 30, 0);
+        long dipSeed = seedForSlopes(RunnerEngine.HazardType.DIP, 30, -1);
         RunnerEngine dip = started(dipSeed);
         float dipEntry = dip.getHazards().get(0).flatStart;
         checkTerrainAbsorbsShot(withProjectile(dipSeed, dipEntry + 25f,
@@ -1066,20 +1154,26 @@ public final class RunnerEngineChecks {
     }
 
     private static void testLongerCourses() {
-        for (long trial = 0; trial < 40; ++trial) {
+        int checkedCourses = 0;
+        for (long trial = 0; trial < 100 && checkedCourses < 40; ++trial) {
             RunnerEngine game = started(trial * 0x9E3779B97F4A7C15L);
+            game.generateAhead(5100f);
+            if (game.getHazards().size() < 6 || game.getHazards().get(5).end() >= 5000f) {
+                continue;
+            }
             int cleared = 0;
             boolean jumped = false;
             // Stay below 500 m so this checks terrain before enemy encounters begin.
-            for (int step = 0; step < 15_000 && cleared < 6; ++step) {
+            for (int step = 0; step < 30_000 && cleared < 6; ++step) {
                 RunnerEngine.Hazard hazard = game.getHazards().get(cleared);
+                if (game.isWaitingForJump()) game.jump();
                 if (hazard.type != RunnerEngine.HazardType.DIP && !jumped
                         && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= hazard.x - jumpLead(hazard.type)) {
                     game.jump();
                     jumped = true;
                 }
-                if (hazard.type == RunnerEngine.HazardType.DIP && hazard.exitDegrees == 0
+                if (hazard.type == RunnerEngine.HazardType.DIP && hazard.exitDegrees == 90
                         && !jumped && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= hazard.end() - 120f
                         && game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
@@ -1095,21 +1189,25 @@ public final class RunnerEngineChecks {
                     jumped = false;
                 }
             }
-            check(cleared == 6, "six early obstacles cleared per course");
+            check(cleared == 6, "six early obstacles cleared per course: trial="
+                    + trial + ", cleared=" + cleared + ", x=" + game.getPlayerX());
+            checkedCourses++;
         }
+        check(checkedCourses == 40, "checked forty courses before enemy spawns");
     }
 
     public static void main(String[] args) {
         testLayout();
         testFirstJumpHint();
         testSlopes();
+        testSteepSlopeSlideAndJump();
         testFirstHazards();
         testDepression();
         testHoleAndExhaustedHealth();
         testSafeRespawn();
         testFailureAndPause();
         testSpeedAndManualPause();
-        testWallLifeLossAndCountdown();
+        testWallStopAndJump();
         testAntagonistGeneration();
         testMovingEnemyGenerationAndBehavior();
         testEnemyStomp();
