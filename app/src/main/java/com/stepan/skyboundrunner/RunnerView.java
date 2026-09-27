@@ -22,7 +22,7 @@ public final class RunnerView extends View {
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int ENEMY = Color.rgb(222, 45, 54);
-    private static final int EMPTY_HEALTH = Color.rgb(218, 223, 227);
+    private static final int EMPTY_HEALTH = Color.argb(128, 218, 223, 227);
     private static final int INK = Color.rgb(20, 44, 94);
 
     private final RunnerEngine engine = new RunnerEngine();
@@ -286,6 +286,11 @@ public final class RunnerView extends View {
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
         out.putInt("health", engine.getHealth());
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
+        out.putFloat("recoilHold", engine.getRecoilHoldSeconds());
+        out.putBoolean("recoveringSpeed", engine.isRecoveringSpeed());
+        out.putFloat("speedBeforeRecoil", engine.getSpeedBeforeRecoil());
+        out.putFloat("recoveryEndX", engine.getRecoveryEndX());
+        out.putFloatArray("defeatedAntagonists", engine.getDefeatedAntagonists());
         out.putFloat("farthestX", engine.getFarthestX());
         out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
         out.putFloatArray("antagonistTimers", engine.getAntagonistTimers());
@@ -309,7 +314,12 @@ public final class RunnerView extends View {
                     saved.getFloat("farthestX", saved.getFloat("x", 140f)),
                     saved.getFloat("visibleWidth", 960f),
                     saved.getFloatArray("antagonistTimers"),
-                    saved.getFloatArray("projectiles"));
+                    saved.getFloatArray("projectiles"),
+                    saved.getFloat("recoilHold", 0f),
+                    saved.getBoolean("recoveringSpeed", false),
+                    saved.getFloat("speedBeforeRecoil", 0f),
+                    saved.getFloat("recoveryEndX", 0f),
+                    saved.getFloatArray("defeatedAntagonists"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }

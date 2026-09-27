@@ -20,6 +20,7 @@ public final class RunnerEngine {
     private static final float START_X = 140f;
     private static final float ENEMY_START_DISTANCE = 500f * WORLD_UNITS_PER_METER;
     private static final float RECOIL_DISTANCE = 72f;
+    private static final float RECOIL_HOLD_SECONDS = .5f;
     private static final float DAMAGE_RECOVERY_SECONDS = .65f;
     private static final float SHOT_INTERVAL_SECONDS = 1.5f;
     private static final float SHOT_SPEED = 380f;
@@ -121,6 +122,7 @@ public final class RunnerEngine {
 
     private final List<Hazard> hazards = new ArrayList<>();
     private final List<Antagonist> antagonists = new ArrayList<>();
+    private final List<Float> defeatedAntagonists = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
     private final List<Integer> completedAttemptDistances = new ArrayList<>();
     private Random random;
@@ -136,6 +138,10 @@ public final class RunnerEngine {
     private float velocityY;
     private int health = MAX_HEALTH;
     private float damageRecoverySeconds;
+    private float recoilHoldSeconds;
+    private boolean recoveringSpeed;
+    private float speedBeforeRecoil;
+    private float recoveryEndX;
     private float countdownSeconds;
     private double elapsedRunSeconds;
     private float terrainSpeedMultiplier = 1f;
@@ -160,6 +166,7 @@ public final class RunnerEngine {
         antagonistRandom = new Random(seed ^ 0x6A09E667F3BCC909L);
         hazards.clear();
         antagonists.clear();
+        defeatedAntagonists.clear();
         projectiles.clear();
         nextHazardX = 840f;
         nextAntagonistX = START_X + ENEMY_START_DISTANCE + 900f
@@ -170,6 +177,10 @@ public final class RunnerEngine {
         velocityY = 0f;
         health = MAX_HEALTH;
         damageRecoverySeconds = 0f;
+        recoilHoldSeconds = 0f;
+        recoveringSpeed = false;
+        speedBeforeRecoil = 0f;
+        recoveryEndX = 0f;
         elapsedRunSeconds = 0d;
         terrainSpeedMultiplier = 1f;
         generateAhead(1800f);
@@ -199,7 +210,8 @@ public final class RunnerEngine {
             float left = surfaceYAt(x + 2f);
             float center = surfaceYAt(x + PLAYER_WIDTH / 2f);
             float right = surfaceYAt(x + PLAYER_WIDTH - 2f);
-            if (!Float.isNaN(center) && !Float.isNaN(left) && !Float.isNaN(right)
+            if (!wasDefeated(x) && !Float.isNaN(center)
+                    && !Float.isNaN(left) && !Float.isNaN(right)
                     && Math.abs(left - center) <= 20f
                     && Math.abs(right - center) <= 20f) {
                 antagonists.add(new Antagonist(x, center - PLAYER_HEIGHT));
@@ -215,9 +227,16 @@ public final class RunnerEngine {
     }
 
     public void jump() {
-        if (mode == Mode.RUNNING && isStanding()) {
+        if (mode == Mode.RUNNING && recoilHoldSeconds <= 0f && isStanding()) {
             velocityY = JUMP_VELOCITY;
         }
+    }
+
+    private boolean wasDefeated(float enemyX) {
+        for (float x : defeatedAntagonists) {
+            if (Math.abs(x - enemyX) < .1f) return true;
+        }
+        return false;
     }
 
     private boolean isStanding() {
@@ -249,6 +268,10 @@ public final class RunnerEngine {
     private boolean advance(float dt) {
         generateAhead(playerX + 1600f);
         damageRecoverySeconds = Math.max(0f, damageRecoverySeconds - dt);
+        if (recoilHoldSeconds > 0f) {
+            recoilHoldSeconds = Math.max(0f, recoilHoldSeconds - dt);
+            return updateProjectiles(dt);
+        }
         float oldX = playerX;
         float oldFeet = playerY + PLAYER_HEIGHT;
         float oldSurface = surfaceYForPlayer(oldX, oldFeet);
@@ -267,7 +290,7 @@ public final class RunnerEngine {
                     && playerX + PLAYER_WIDTH > hazard.end()
                     && playerY + PLAYER_HEIGHT > GROUND_Y + 1f
                     && playerY < GROUND_Y + DIP_DEPTH) {
-                if (hitSolid(hazard.end(), wasStanding)) return true;
+                if (hitSolid(hazard.end(), hazard.end(), wasStanding)) return true;
                 break;
             }
         }
@@ -277,7 +300,7 @@ public final class RunnerEngine {
             if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 0
                     && playerX < hazard.x && playerX + PLAYER_WIDTH > hazard.x
                     && feet > GROUND_Y - LEDGE_HEIGHT + 1f && playerY < GROUND_Y) {
-                if (hitSolid(hazard.x, wasStanding)) return true;
+                if (hitSolid(hazard.x, hazard.end(), wasStanding)) return true;
                 break;
             }
         }
@@ -315,27 +338,43 @@ public final class RunnerEngine {
             restartAfterFailure();
             return true;
         }
-        for (Antagonist antagonist : antagonists) {
+        for (int i = 0; i < antagonists.size(); i++) {
+            Antagonist antagonist = antagonists.get(i);
             if (antagonist.x > playerX + PLAYER_WIDTH) break;
             if (playerX + PLAYER_WIDTH - 4f > antagonist.x + 4f
                     && playerX + 4f < antagonist.x + PLAYER_WIDTH - 4f
                     && playerY + PLAYER_HEIGHT - 5f > antagonist.y + 5f
                     && playerY + 5f < antagonist.y + PLAYER_HEIGHT - 5f) {
-                if (hitSolid(antagonist.x, wasStanding)) return true;
+                if (damageRecoverySeconds <= 0f) {
+                    defeatedAntagonists.add(antagonist.x);
+                    antagonists.remove(i);
+                }
+                if (hitSolid(antagonist.x, antagonist.x + PLAYER_WIDTH,
+                        wasStanding)) return true;
                 break;
             }
         }
         if (updateProjectiles(dt)) return true;
         // Waiting at a dip's lip is not counted as running time.
-        if (playerX > oldX + .01f) elapsedRunSeconds += dt;
+        if (playerX > oldX + .01f && !recoveringSpeed) elapsedRunSeconds += dt;
+        if (recoveringSpeed && playerX >= recoveryEndX) {
+            recoveringSpeed = false;
+            terrainSpeedMultiplier = speedBeforeRecoil / getBaseSpeed();
+            speedBeforeRecoil = 0f;
+            recoveryEndX = 0f;
+        }
         return false;
     }
 
-    private boolean hitSolid(float faceX, boolean wasStanding) {
+    private boolean hitSolid(float faceX, float obstacleEndX, boolean wasStanding) {
         playerX = Math.min(playerX, faceX - PLAYER_WIDTH);
         if (damageRecoverySeconds <= 0f) {
+            if (!recoveringSpeed) speedBeforeRecoil = getSpeed();
             if (takeDamage()) return true;
             playerX = Math.max(START_X, playerX - RECOIL_DISTANCE);
+            recoveringSpeed = true;
+            recoilHoldSeconds = RECOIL_HOLD_SECONDS;
+            recoveryEndX = Math.max(recoveryEndX, obstacleEndX);
         }
         if (wasStanding) {
             float surface = surfaceYForPlayer(playerX, playerY + PLAYER_HEIGHT);
@@ -497,6 +536,21 @@ public final class RunnerEngine {
                         Mode savedResumeMode, int savedHealth, float savedDamageRecovery,
                         float savedFarthestX, float savedVisibleWidth,
                         float[] savedAntagonistTimers, float[] savedProjectiles) {
+        restore(courseSeed, savedAttempts, x, y, vy, remainingSeconds, savedRunSeconds,
+                savedTerrainMultiplier, savedMode, savedResumeMode, savedHealth,
+                savedDamageRecovery, savedFarthestX, savedVisibleWidth,
+                savedAntagonistTimers, savedProjectiles, 0f, false, 0f, 0f, null);
+    }
+
+    public void restore(long courseSeed, int savedAttempts, float x, float y,
+                        float vy, float remainingSeconds, double savedRunSeconds,
+                        float savedTerrainMultiplier, Mode savedMode,
+                        Mode savedResumeMode, int savedHealth, float savedDamageRecovery,
+                        float savedFarthestX, float savedVisibleWidth,
+                        float[] savedAntagonistTimers, float[] savedProjectiles,
+                        float savedRecoilHold, boolean savedRecoveringSpeed,
+                        float savedSpeedBeforeRecoil, float savedRecoveryEndX,
+                        float[] savedDefeatedAntagonists) {
         setVisibleWorldWidth(savedVisibleWidth);
         resetCourse(courseSeed);
         attempts = Math.max(1, savedAttempts);
@@ -506,9 +560,22 @@ public final class RunnerEngine {
         velocityY = vy;
         health = Math.max(1, Math.min(MAX_HEALTH, savedHealth));
         damageRecoverySeconds = Math.max(0f, savedDamageRecovery);
+        recoveringSpeed = savedRecoveringSpeed && savedSpeedBeforeRecoil > 0f
+                && savedRecoveryEndX > x;
+        recoilHoldSeconds = recoveringSpeed
+                ? Math.max(0f, Math.min(RECOIL_HOLD_SECONDS, savedRecoilHold)) : 0f;
+        speedBeforeRecoil = recoveringSpeed ? savedSpeedBeforeRecoil : 0f;
+        recoveryEndX = recoveringSpeed ? savedRecoveryEndX : 0f;
         countdownSeconds = remainingSeconds;
         elapsedRunSeconds = Math.max(0d, savedRunSeconds);
         terrainSpeedMultiplier = Math.max(.8f, Math.min(1.2f, savedTerrainMultiplier));
+        if (savedDefeatedAntagonists != null) {
+            for (float enemyX : savedDefeatedAntagonists) {
+                if (!Float.isNaN(enemyX) && !Float.isInfinite(enemyX)) {
+                    defeatedAntagonists.add(enemyX);
+                }
+            }
+        }
         generateAhead(farthestX + Math.max(1800f, visibleWorldWidth + 550f));
         if (savedAntagonistTimers != null) {
             for (Antagonist antagonist : antagonists) {
@@ -537,6 +604,11 @@ public final class RunnerEngine {
 
     public List<Hazard> getHazards() { return hazards; }
     public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
+    public float[] getDefeatedAntagonists() {
+        float[] state = new float[defeatedAntagonists.size()];
+        for (int i = 0; i < state.length; i++) state[i] = defeatedAntagonists.get(i);
+        return state;
+    }
     public List<Projectile> getProjectiles() { return Collections.unmodifiableList(projectiles); }
     public float[] getAntagonistTimers() {
         float[] state = new float[antagonists.size() * 2];
@@ -581,6 +653,10 @@ public final class RunnerEngine {
     public float getVelocityY() { return velocityY; }
     public int getHealth() { return health; }
     public float getDamageRecoverySeconds() { return damageRecoverySeconds; }
+    public float getRecoilHoldSeconds() { return recoilHoldSeconds; }
+    public boolean isRecoveringSpeed() { return recoveringSpeed; }
+    public float getSpeedBeforeRecoil() { return speedBeforeRecoil; }
+    public float getRecoveryEndX() { return recoveryEndX; }
     public float getVisibleWorldWidth() { return visibleWorldWidth; }
     public float getCountdownSeconds() { return countdownSeconds; }
     public double getElapsedRunSeconds() { return elapsedRunSeconds; }
@@ -590,6 +666,8 @@ public final class RunnerEngine {
                 * (int) Math.floor((elapsedRunSeconds + .000001d) / SPEED_INTERVAL_SECONDS);
     }
     public float getSpeed() {
+        if (recoilHoldSeconds > 0f) return 0f;
+        if (recoveringSpeed) return BASE_SPEED;
         return getBaseSpeed() * terrainSpeedMultiplier;
     }
     public float getSpeedMetersPerSecond() { return getSpeed() / WORLD_UNITS_PER_METER; }
