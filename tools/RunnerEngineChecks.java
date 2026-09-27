@@ -15,6 +15,38 @@ public final class RunnerEngineChecks {
         return game;
     }
 
+    private static void testFirstJumpHint() {
+        RunnerEngine game = started(1L);
+        check(!game.hasCompletedFirstJump(), "jump hint starts visible");
+        game.jump();
+        check(game.isControlledJumpInProgress() && !game.hasCompletedFirstJump(),
+                "jump hint remains visible while first controlled jump is in the air");
+
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
+                game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                game.getMode(), game.getResumeMode(), game.getHealth(),
+                game.getDamageRecoverySeconds(), game.getFarthestX(),
+                game.getVisibleWorldWidth(), game.getAntagonistTimers(),
+                game.getProjectileState(), game.getDefeatedAntagonists(),
+                game.getBonusMeters(), game.hasCompletedFirstJump(),
+                game.isControlledJumpInProgress());
+        check(restored.getMode() == RunnerEngine.Mode.PAUSED
+                        && restored.isControlledJumpInProgress()
+                        && !restored.hasCompletedFirstJump(),
+                "activity recreation retains an unfinished first jump");
+        restored.continueGame();
+        for (int step = 0; step < 160 && !restored.hasCompletedFirstJump(); ++step) {
+            restored.update(1f / 120f);
+        }
+        check(restored.hasCompletedFirstJump() && !restored.isControlledJumpInProgress()
+                        && restored.getLives() == RunnerEngine.MAX_LIVES,
+                "hint disappears after the first controlled jump lands");
+        restored.startNewGame(2L);
+        check(!restored.hasCompletedFirstJump(), "new run shows jump hint again");
+    }
+
     private static void testLayout() {
         boolean sawThirty = false;
         boolean sawFortyFive = false;
@@ -573,6 +605,16 @@ public final class RunnerEngineChecks {
         }
         check(sawGround && sawLedge && sawDepression && sawSlope,
                 "enemies can appear on ground, ledges, depressions, and inclines");
+
+        RunnerEngine bonusRun = new RunnerEngine();
+        bonusRun.restore(1L, RunnerEngine.MAX_LIVES, 5130f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f, 0f, 0d, 1f,
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                RunnerEngine.MAX_HEALTH, 0f, 5130f, 960f, null, null, null,
+                3, false, false);
+        bonusRun.generateAhead(80_000f);
+        check(bonusRun.getDistance() == 502 && bonusRun.getAntagonists().isEmpty(),
+                "bonus meters do not unlock enemies before 500 physical metres");
     }
 
     private static void testEnemyStomp() {
@@ -602,8 +644,11 @@ public final class RunnerEngineChecks {
                         && stomp.getLives() == RunnerEngine.MAX_LIVES
                         && stomp.getDamageRecoverySeconds() == 0f
                         && stomp.getMode() == RunnerEngine.Mode.RUNNING
-                        && stomp.getSpeed() == startingSpeed,
-                "stomp leaves lives, health, movement, and speed unchanged");
+                        && stomp.getSpeed() == startingSpeed
+                        && stomp.getBonusMeters() == 2
+                        && stomp.getDistance() == (int) ((stomp.getFarthestX() - 140f)
+                        / RunnerEngine.WORLD_UNITS_PER_METER) + 2,
+                "stomp awards two bonus metres without changing health, lives or speed");
 
         RunnerEngine justBelow = enemyOnOpenGround(130f);
         RunnerEngine.Antagonist lowerFoe = justBelow.getAntagonists().stream()
@@ -615,12 +660,13 @@ public final class RunnerEngineChecks {
                 RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
         justBelow.continueGame();
         justBelow.update(1f / 120f);
-        check(justBelow.getHealth() == RunnerEngine.MAX_HEALTH
-                        && justBelow.getLives() == RunnerEngine.MAX_LIVES - 1
-                        && justBelow.getMode() == RunnerEngine.Mode.COUNTDOWN
-                        && justBelow.getPlayerX() < initialX
+        check(justBelow.getHealth() == RunnerEngine.MAX_HEALTH - 2
+                        && justBelow.getLives() == RunnerEngine.MAX_LIVES
+                        && justBelow.getMode() == RunnerEngine.Mode.RUNNING
+                        && justBelow.getPlayerX() > initialX
+                        && justBelow.getBonusMeters() == 1
                         && justBelow.getAntagonists().stream().noneMatch(e -> e.x == lowerFoe.x),
-                "descending contact below the upper quarter costs one life");
+                "descending contact below the upper quarter costs two health and gives one bonus metre");
     }
 
     private static void testAntagonistAndProjectiles() {
@@ -634,15 +680,17 @@ public final class RunnerEngineChecks {
         float previousSpeed = game.getSpeed();
         check(previousSpeed > RunnerEngine.BASE_SPEED,
                 "enemy approached faster than the starting speed");
-        for (int step = 0; step < 300 && game.getLives() == RunnerEngine.MAX_LIVES;
+        float approachX = game.getPlayerX();
+        for (int step = 0; step < 300 && game.getDefeatedAntagonists().length == 0;
                 step++) game.update(1f / 120f);
-        check(game.getLives() == RunnerEngine.MAX_LIVES - 1
-                        && game.getHealth() == RunnerEngine.MAX_HEALTH
-                        && game.getMode() == RunnerEngine.Mode.COUNTDOWN,
-                "running into a stationary oval costs one life and refills health");
-        check(game.getPlayerX() <= game.getFarthestX() - 500f
+        check(game.getLives() == RunnerEngine.MAX_LIVES
+                        && game.getHealth() == RunnerEngine.MAX_HEALTH - 2
+                        && game.getMode() == RunnerEngine.Mode.RUNNING
+                        && game.getBonusMeters() == 1,
+                "running into an oval costs two health and awards one bonus metre");
+        check(game.getPlayerX() > approachX
                         && game.getSpeed() == previousSpeed,
-                "enemy collision respawns at least 50 metres back without resetting speed");
+                "enemy collision does not interrupt movement or reset speed");
         final float struckEnemyX = enemyX;
         check(game.getAntagonists().stream().noneMatch(e -> e.x == struckEnemyX)
                         && game.getDefeatedAntagonists().length == 1,
@@ -654,20 +702,55 @@ public final class RunnerEngineChecks {
                 game.getMode(), game.getResumeMode(), game.getHealth(),
                 game.getDamageRecoverySeconds(), game.getFarthestX(),
                 game.getVisibleWorldWidth(), game.getAntagonistTimers(),
-                game.getProjectileState(), game.getDefeatedAntagonists());
+                game.getProjectileState(), game.getDefeatedAntagonists(),
+                game.getBonusMeters(), game.hasCompletedFirstJump(),
+                game.isControlledJumpInProgress());
         restoredHit.generateAhead(40_000f);
         check(restoredHit.getMode() == RunnerEngine.Mode.PAUSED
-                        && restoredHit.getResumeMode() == RunnerEngine.Mode.COUNTDOWN
+                        && restoredHit.getResumeMode() == RunnerEngine.Mode.RUNNING
+                        && restoredHit.getBonusMeters() == 1
+                        && restoredHit.getDistance() == game.getDistance()
                         && restoredHit.getAntagonists().stream().noneMatch(e -> e.x == struckEnemyX),
-                "defeated enemy and remaining lives persist through activity restoration");
-        float respawnX = game.getPlayerX();
-        game.jump();
-        check(game.getVelocityY() == 0f, "jump is ignored until the life-loss countdown finishes");
-        game.update(3f);
+                "enemy removal and bonus score persist through activity restoration");
+        float afterHitX = game.getPlayerX();
         game.update(1f / 120f);
         check(game.getMode() == RunnerEngine.Mode.RUNNING
-                        && game.getPlayerX() > respawnX,
+                        && game.getPlayerX() > afterHitX,
                 "run resumes normally after an enemy contact");
+
+        RunnerEngine lastHealth = enemyOnOpenGround(130f);
+        float nextEnemyX = lastHealth.getAntagonists().stream()
+                .filter(e -> e.x > lastHealth.getPlayerX()).findFirst().get().x;
+        float closeX = nextEnemyX - RunnerEngine.PLAYER_WIDTH + 10f;
+        lastHealth.restore(lastHealth.getSeed(), RunnerEngine.MAX_LIVES, closeX,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f, 0f, 0d, 1f,
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                2, .3f, closeX, 960f, null, null);
+        lastHealth.continueGame();
+        lastHealth.update(1f / 120f);
+        check(lastHealth.getLives() == RunnerEngine.MAX_LIVES - 1
+                        && lastHealth.getMode() == RunnerEngine.Mode.COUNTDOWN
+                        && lastHealth.getHealth() == RunnerEngine.MAX_HEALTH
+                        && lastHealth.getBonusMeters() == 1,
+                "enemy collision depletes health despite projectile recovery and awards its bonus");
+
+        RunnerEngine finalLife = enemyOnOpenGround(130f);
+        float finalEnemyX = finalLife.getAntagonists().stream()
+                .filter(e -> e.x > finalLife.getPlayerX()).findFirst().get().x;
+        float finalContactX = finalEnemyX - RunnerEngine.PLAYER_WIDTH + 10f;
+        finalLife.restore(finalLife.getSeed(), 1, finalContactX,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f, 0f, 0d, 1f,
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                2, 0f, finalContactX, 960f, null, null);
+        finalLife.continueGame();
+        finalLife.update(1f / 120f);
+        check(finalLife.getMode() == RunnerEngine.Mode.GAME_OVER
+                        && finalLife.getBonusMeters() == 1
+                        && finalLife.getBestDistance() == finalLife.getDistance(),
+                "bonus from the final collision counts toward the saved best score");
+        finalLife.startNewGame(99L);
+        check(finalLife.getBonusMeters() == 0 && finalLife.getDistance() == 0,
+                "new run resets bonus metres");
 
         RunnerEngine shooter = enemyOnOpenGround(330f);
         enemyX = shooter.getAntagonists().stream()
@@ -810,6 +893,7 @@ public final class RunnerEngineChecks {
 
     public static void main(String[] args) {
         testLayout();
+        testFirstJumpHint();
         testSlopes();
         testFirstHazards();
         testDepression();
