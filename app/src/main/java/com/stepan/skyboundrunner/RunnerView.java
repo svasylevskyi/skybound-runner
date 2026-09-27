@@ -21,12 +21,15 @@ public final class RunnerView extends View {
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int ENEMY = Color.rgb(222, 45, 54);
+    private static final int LIFE_RED = Color.rgb(222, 45, 54);
+    private static final int LIFE_GRAY = Color.rgb(146, 151, 159);
     private static final int EMPTY_HEALTH = Color.argb(128, 218, 223, 227);
     private static final int INK = Color.rgb(20, 44, 94);
 
     private final RunnerEngine engine = new RunnerEngine();
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path terrainPath = new Path();
+    private final Path heartPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
@@ -152,8 +155,7 @@ public final class RunnerView extends View {
         x = hudItem(canvas, "Best " + engine.getBestDistance() + " m", x);
         hudItem(canvas, String.format(Locale.US, "Speed %.1f m/s",
                 engine.getSpeedMetersPerSecond()), x);
-        text(canvas, "Lives " + engine.getLives(), logicalWidth - 75f, 38f,
-                18f, INK, Paint.Align.RIGHT);
+        drawLives(canvas, logicalWidth - 133f, 16f, 22f, 5f, -1f);
         drawHealth(canvas);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN) {
@@ -176,6 +178,48 @@ public final class RunnerView extends View {
                     ? Color.rgb(red, green, blue) : EMPTY_HEALTH);
             canvas.drawCircle(left + i * 24f, 79f, 9f, paint);
         }
+    }
+
+    private void drawLives(Canvas canvas, float centerX, float top, float size,
+                           float gap, float fadeProgress) {
+        float left = centerX - (RunnerEngine.MAX_LIVES * size
+                + (RunnerEngine.MAX_LIVES - 1) * gap) / 2f;
+        int lives = engine.getLives();
+        for (int i = 0; i < RunnerEngine.MAX_LIVES; i++) {
+            int color = i < lives ? LIFE_RED : LIFE_GRAY;
+            if (i == lives && fadeProgress >= 0f) {
+                float progress = Math.min(1f, fadeProgress);
+                color = Color.rgb(
+                        Math.round(Color.red(LIFE_RED) +
+                                (Color.red(LIFE_GRAY) - Color.red(LIFE_RED)) * progress),
+                        Math.round(Color.green(LIFE_RED) +
+                                (Color.green(LIFE_GRAY) - Color.green(LIFE_RED)) * progress),
+                        Math.round(Color.blue(LIFE_RED) +
+                                (Color.blue(LIFE_GRAY) - Color.blue(LIFE_RED)) * progress));
+            }
+            drawHeart(canvas, left + i * (size + gap), top, size, color);
+        }
+    }
+
+    private void drawHeart(Canvas canvas, float left, float top, float size, int color) {
+        heartPath.rewind();
+        heartPath.moveTo(left + size * .5f, top + size * .2f);
+        heartPath.cubicTo(left + size * .37f, top - size * .03f,
+                left + size * .04f, top + size * .04f,
+                left + size * .04f, top + size * .32f);
+        heartPath.cubicTo(left + size * .04f, top + size * .58f,
+                left + size * .30f, top + size * .82f,
+                left + size * .5f, top + size * .98f);
+        heartPath.cubicTo(left + size * .70f, top + size * .82f,
+                left + size * .96f, top + size * .58f,
+                left + size * .96f, top + size * .32f);
+        heartPath.cubicTo(left + size * .96f, top + size * .04f,
+                left + size * .63f, top - size * .03f,
+                left + size * .5f, top + size * .2f);
+        heartPath.close();
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(color);
+        canvas.drawPath(heartPath, paint);
     }
 
     private float hudItem(Canvas canvas, String value, float x) {
@@ -218,10 +262,14 @@ public final class RunnerView extends View {
                     21f, INK, Paint.Align.CENTER);
         } else {
             int number = Math.max(1, (int) Math.ceil(engine.getCountdownSeconds()));
-            text(canvas, engine.getLives() < RunnerEngine.MAX_LIVES
-                    ? "Life lost - " + engine.getLives() + " left" : "Get ready",
-                    midX, midY - 85f, 27f,
-                    INK, Paint.Align.CENTER);
+            if (engine.getLives() < RunnerEngine.MAX_LIVES) {
+                float fadeProgress = Math.max(0f,
+                        (3f - engine.getCountdownSeconds()) / .75f);
+                drawLives(canvas, midX, midY - 125f, 38f, 10f, fadeProgress);
+            } else {
+                text(canvas, "Get ready", midX, midY - 85f, 27f,
+                        INK, Paint.Align.CENTER);
+            }
             text(canvas, String.valueOf(number), midX, midY + 29f, 90f,
                     INK, Paint.Align.CENTER);
         }
