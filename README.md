@@ -1,15 +1,17 @@
 # Skybound Runner
 
-A lightweight Android side scroller prototype. The oval runner moves automatically; tap anywhere while running to jump. Raised yellow walls act as ledges, holes must be cleared, and shallow depressions can be jumped over or escaped after landing inside. Ledges and depressions may have vertical, 30°, or 45° entrances and exits. Contact with a vertical ledge face or a fall into a hole returns the runner to the beginning of the **same** course. Tapping Start on a fresh launch generates a new course.
+A lightweight Android side scroller prototype. The oval runner moves automatically; tap anywhere while running to jump. Raised yellow walls act as ledges, holes must be cleared, and shallow depressions can be jumped over or escaped after landing inside. Ledges and depressions may have vertical, 30°, or 45° entrances and exits. Tapping Start on a fresh launch generates a new course.
 
 ## Playing
 
 1. Install the debug APK on an Android 6.0 (API 23) or newer device and launch **Skybound Runner**.
 2. Tap **Start**. The three second countdown begins.
-3. Tap anywhere to jump. A jump is available when standing on ground, a ledge, or the floor of a depression. A sloped entrance or exit can be run along; a vertical far lip of a depression stops the runner until they jump out, without ending the attempt.
+3. Tap anywhere to jump. A jump is available when standing on ground, a ledge, or the floor of a depression. A sloped entrance or exit can be run along. A vertical ledge face or far lip of a depression costs one health point and pushes the runner back to make room for another jump.
 4. Tap the pause button in the top-right corner or send the app to the background. Tap **Continue** to resume the run or remaining countdown.
 
-The top row shows current distance, the best **completed** attempt to beat, current speed in metres per second, and attempt number. Every three seconds spent moving increases base speed slightly. Uphill slopes temporarily slow the runner and downhill slopes speed them up; speed gradually returns to its base value after leaving a slope. A failed attempt records its distance and resets speed. Completed distances and the best score remain available after restarting the app.
+The top row shows current distance, the best **completed** attempt to beat, current speed in metres per second, and attempt number. Ten dots below it show health from red on the left to green on the right; lost points turn gray from right to left. After 500 m, stationary red ovals may appear on flat ground, slopes, ledges, or in depressions, with empty stretches between them. Jump over them and the small red dots they shoot at regular intervals. Touching an oval costs one health point and pushes the runner back; touching a projectile costs one point and causes a small upward bounce. Reaching zero health or falling into a hole starts another attempt on the **same** course.
+
+Every three seconds spent moving increases base speed slightly. Uphill slopes temporarily slow the runner and downhill slopes speed them up; speed gradually returns to its base value after leaving a slope. A failed attempt records its farthest distance and resets speed and health. Completed distances and the best score remain available after restarting the app.
 
 The game is designed for landscape orientation. It does not require internet access or any runtime permissions.
 

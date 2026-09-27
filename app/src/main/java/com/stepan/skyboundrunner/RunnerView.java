@@ -21,6 +21,8 @@ public final class RunnerView extends View {
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
+    private static final int ENEMY = Color.rgb(222, 45, 54);
+    private static final int EMPTY_HEALTH = Color.rgb(131, 142, 151);
     private static final int INK = Color.rgb(20, 44, 94);
 
     private final RunnerEngine engine = new RunnerEngine();
@@ -55,6 +57,7 @@ public final class RunnerView extends View {
         float scale = getHeight() / RunnerEngine.WORLD_HEIGHT;
         if (scale <= 0f) return;
         logicalWidth = getWidth() / scale;
+        engine.setVisibleWorldWidth(logicalWidth);
 
         long now = System.nanoTime();
         if (lastFrameNanos != 0L) {
@@ -110,6 +113,17 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
+        paint.setColor(ENEMY);
+        for (RunnerEngine.Antagonist antagonist : engine.getAntagonists()) {
+            if (antagonist.x + RunnerEngine.PLAYER_WIDTH < cameraX) continue;
+            if (antagonist.x > right) break;
+            canvas.drawOval(antagonist.x, antagonist.y,
+                    antagonist.x + RunnerEngine.PLAYER_WIDTH,
+                    antagonist.y + RunnerEngine.PLAYER_HEIGHT, paint);
+        }
+        for (RunnerEngine.Projectile shot : engine.getProjectiles()) {
+            canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
+        }
         paint.setColor(AVATAR);
         canvas.drawOval(engine.getPlayerX(), engine.getPlayerY(),
                 engine.getPlayerX() + RunnerEngine.PLAYER_WIDTH,
@@ -141,13 +155,27 @@ public final class RunnerView extends View {
                 engine.getSpeedMetersPerSecond()), x);
         text(canvas, "Attempt " + engine.getAttempts(), logicalWidth - 75f, 38f,
                 18f, INK, Paint.Align.RIGHT);
+        drawHealth(canvas);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN) {
             drawPauseButton(canvas);
         }
         if (engine.getMode() == RunnerEngine.Mode.RUNNING) {
-            text(canvas, "Tap anywhere to jump", logicalWidth / 2f, 77f,
+            text(canvas, "Tap anywhere to jump", logicalWidth / 2f, 122f,
                     18f, INK, Paint.Align.CENTER);
+        }
+    }
+
+    private void drawHealth(Canvas canvas) {
+        float left = logicalWidth / 2f - 9f * 12f;
+        for (int i = 0; i < RunnerEngine.MAX_HEALTH; i++) {
+            float ratio = i / (float) (RunnerEngine.MAX_HEALTH - 1);
+            int red = Math.round(230f * (1f - ratio) + 45f * ratio);
+            int green = Math.round(48f * (1f - ratio) + 181f * ratio);
+            int blue = Math.round(53f * (1f - ratio) + 68f * ratio);
+            paint.setColor(i < engine.getHealth()
+                    ? Color.rgb(red, green, blue) : EMPTY_HEALTH);
+            canvas.drawCircle(left + i * 24f, 79f, 9f, paint);
         }
     }
 
@@ -256,6 +284,12 @@ public final class RunnerView extends View {
         out.putFloat("countdown", engine.getCountdownSeconds());
         out.putDouble("elapsedRun", engine.getElapsedRunSeconds());
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
+        out.putInt("health", engine.getHealth());
+        out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
+        out.putFloat("farthestX", engine.getFarthestX());
+        out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
+        out.putFloatArray("antagonistTimers", engine.getAntagonistTimers());
+        out.putFloatArray("projectiles", engine.getProjectileState());
         out.putString("mode", engine.getMode().name());
         out.putString("resumeMode", engine.getResumeMode().name());
     }
@@ -269,7 +303,13 @@ public final class RunnerView extends View {
                     saved.getDouble("elapsedRun", 0d),
                     saved.getFloat("slopeSpeed", 1f),
                     RunnerEngine.Mode.valueOf(saved.getString("mode", "TITLE")),
-                    RunnerEngine.Mode.valueOf(saved.getString("resumeMode", "RUNNING")));
+                    RunnerEngine.Mode.valueOf(saved.getString("resumeMode", "RUNNING")),
+                    saved.getInt("health", RunnerEngine.MAX_HEALTH),
+                    saved.getFloat("damageRecovery", 0f),
+                    saved.getFloat("farthestX", saved.getFloat("x", 140f)),
+                    saved.getFloat("visibleWidth", 960f),
+                    saved.getFloatArray("antagonistTimers"),
+                    saved.getFloatArray("projectiles"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }
