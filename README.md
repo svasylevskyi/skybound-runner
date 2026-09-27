@@ -17,6 +17,12 @@ The game is designed for landscape orientation. It does not require internet acc
 
 Open this directory as a project in Android Studio. It uses the Android Gradle plugin 8.7.3, Java 8 source compatibility, compile SDK 35, and no external runtime libraries. Run `./gradlew assembleDebug` (or `gradlew.bat assembleDebug` on Windows) to build a new debug APK. Android Studio may need to download Gradle and the Android SDK on first use. The checked-in source does not include a private signing key; new debug builds may need the previously installed prototype removed before installation.
 
+### Downloading a test APK from GitHub
+
+Every update to `main` runs [Build Android APK](https://github.com/svasylevskyi/skybound-runner/actions/workflows/build-apk.yml). To build the current `main` again, open that page, select **Run workflow**, choose `main`, and start the run. When it succeeds, open the run and download **SkyboundRunner-debug.apk** from **Artifacts**. The APK is ready to install on Android without extracting a ZIP; GitHub retains it for 30 days.
+
+Each run signs the APK with a new debug key. If an older build of the game is already installed, uninstall it before installing the new APK. Uninstalling also clears the saved best distance.
+
 If you have Android SDK platform 35 and build tools 35.0.0 but no Gradle, you can also run `ANDROID_HOME=/path/to/android-sdk bash tools/build_with_sdk.sh` from this directory. This creates `SkyboundRunner-debug.apk` at the project root.
 
 The gameplay is in `app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java`, independently of Android APIs; `RunnerView.java` handles drawing and touch. The executable core checks are in `tools/RunnerEngineChecks.java` and can run with:
