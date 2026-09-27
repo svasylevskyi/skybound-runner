@@ -363,11 +363,8 @@ public final class RunnerEngine {
                 if (antagonist.shotTimer <= 0f) {
                     float startX = antagonist.x - PROJECTILE_RADIUS - 2f;
                     float startY = antagonist.y + PLAYER_HEIGHT / 2f;
-                    float dx = playerX + PLAYER_WIDTH / 2f - startX;
-                    float dy = playerY + PLAYER_HEIGHT / 2f - startY;
-                    float length = (float) Math.hypot(dx, dy);
                     projectiles.add(new Projectile(startX, startY,
-                            SHOT_SPEED * dx / length, SHOT_SPEED * dy / length));
+                            -SHOT_SPEED, 0f));
                     antagonist.shotTimer += SHOT_INTERVAL_SECONDS;
                 }
             }
@@ -376,6 +373,10 @@ public final class RunnerEngine {
             Projectile shot = projectiles.get(i);
             shot.x += shot.vx * dt;
             shot.y += shot.vy * dt;
+            if (touchesTerrain(shot)) {
+                projectiles.remove(i);
+                continue;
+            }
             float dx = (shot.x - playerX - PLAYER_WIDTH / 2f)
                     / (PLAYER_WIDTH / 2f + PROJECTILE_RADIUS);
             float dy = (shot.y - playerY - PLAYER_HEIGHT / 2f)
@@ -388,6 +389,20 @@ public final class RunnerEngine {
                     || shot.y < -50f || shot.y > WORLD_HEIGHT + 50f) {
                 projectiles.remove(i);
             }
+        }
+        return false;
+    }
+
+    private boolean touchesTerrain(Projectile shot) {
+        if (shot.y + PROJECTILE_RADIUS < GROUND_Y - LEDGE_HEIGHT) return false;
+        // Check the circular footprint against the same surfaces used for movement.
+        // The outer samples also catch a vertical face before the dot's center crosses it.
+        for (int sample = -2; sample <= 2; sample++) {
+            float offset = sample * PROJECTILE_RADIUS / 2f;
+            float surface = surfaceYAt(shot.x + offset);
+            float bottom = shot.y + (float) Math.sqrt(
+                    PROJECTILE_RADIUS * PROJECTILE_RADIUS - offset * offset);
+            if (!Float.isNaN(surface) && bottom >= surface) return true;
         }
         return false;
     }
@@ -508,7 +523,7 @@ public final class RunnerEngine {
         if (savedProjectiles != null) {
             for (int i = 0; i + 3 < savedProjectiles.length; i += 4) {
                 projectiles.add(new Projectile(savedProjectiles[i], savedProjectiles[i + 1],
-                        savedProjectiles[i + 2], savedProjectiles[i + 3]));
+                        -SHOT_SPEED, 0f));
             }
         }
         if (savedMode == Mode.TITLE) {

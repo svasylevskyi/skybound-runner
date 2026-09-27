@@ -485,6 +485,8 @@ public final class RunnerEngineChecks {
         check(!shooter.getProjectiles().isEmpty(),
                 "visible enemy fires a moving red dot towards the runner");
         float[] shots = shooter.getProjectileState();
+        check(shots[2] < 0f && shots[3] == 0f,
+                "projectile travels left with no vertical velocity");
         float[] timers = shooter.getAntagonistTimers();
         RunnerEngine restored = new RunnerEngine();
         restored.restore(shooter.getSeed(), shooter.getAttempts(),
@@ -501,11 +503,15 @@ public final class RunnerEngineChecks {
         check(restored.getProjectileState()[0] == shots[0],
                 "paused projectiles do not move");
         restored.continueGame();
+        restored.jump();
         restored.update(1f / 120f);
         shooter.update(1f / 120f);
         check(Math.abs(restored.getProjectileState()[0]
                 - shooter.getProjectileState()[0]) < .01f,
                 "restored projectile continues on the original trajectory");
+        check(restored.getProjectileState()[1] == shots[1]
+                        && shooter.getProjectileState()[1] == shots[1],
+                "jumping does not steer a projectile vertically");
 
         for (int step = 0; step < 240 && shooter.getHealth() == RunnerEngine.MAX_HEALTH;
                 step++) shooter.update(1f / 120f);
@@ -522,6 +528,56 @@ public final class RunnerEngineChecks {
         }
         check(hitY - highestY > 10f && hitY - highestY < 30f,
                 "projectile bounce rises much less than a controlled jump");
+    }
+
+    private static RunnerEngine withProjectile(long seed, float x, float y) {
+        RunnerEngine game = new RunnerEngine();
+        game.restore(seed, 1, 140f, RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                RunnerEngine.MAX_HEALTH, 0f, 140f, 2000f, null,
+                new float[]{x, y, -380f, 0f});
+        game.continueGame();
+        return game;
+    }
+
+    private static void checkTerrainAbsorbsShot(RunnerEngine game, String description) {
+        check(game.getProjectiles().size() == 1, "test starts with one " + description);
+        for (int step = 0; step < 120 && !game.getProjectiles().isEmpty(); step++) {
+            game.update(1f / 120f);
+        }
+        check(game.getProjectiles().isEmpty() && game.getHealth() == RunnerEngine.MAX_HEALTH,
+                description + " absorbs a projectile before it reaches the runner");
+    }
+
+    private static void testProjectileTerrainCollisions() {
+        long verticalSeed = seedForSlopes(RunnerEngine.HazardType.WALL, 0, 0);
+        RunnerEngine vertical = started(verticalSeed);
+        float verticalEdge = vertical.getHazards().get(0).end();
+        checkTerrainAbsorbsShot(withProjectile(verticalSeed, verticalEdge + 25f,
+                RunnerEngine.GROUND_Y - 24f), "vertical ledge face");
+
+        long slopeSeed = seedForSlopes(RunnerEngine.HazardType.WALL, 30, 45);
+        RunnerEngine sloped = started(slopeSeed);
+        float slopeEdge = sloped.getHazards().get(0).end();
+        checkTerrainAbsorbsShot(withProjectile(slopeSeed, slopeEdge + 25f,
+                RunnerEngine.GROUND_Y - 24f), "45-degree ledge slope");
+
+        long dipSeed = seedForSlopes(RunnerEngine.HazardType.DIP, 30, 0);
+        RunnerEngine dip = started(dipSeed);
+        float dipEntry = dip.getHazards().get(0).flatStart;
+        checkTerrainAbsorbsShot(withProjectile(dipSeed, dipEntry + 25f,
+                RunnerEngine.GROUND_Y + 18f), "30-degree depression slope");
+
+        checkTerrainAbsorbsShot(withProjectile(verticalSeed, 500f,
+                RunnerEngine.GROUND_Y - 3f), "flat ground");
+
+        RunnerEngine highShot = withProjectile(verticalSeed, verticalEdge + 25f,
+                RunnerEngine.GROUND_Y - RunnerEngine.LEDGE_HEIGHT - 25f);
+        float startingY = highShot.getProjectiles().get(0).getY();
+        for (int step = 0; step < 60; step++) highShot.update(1f / 120f);
+        check(highShot.getProjectiles().size() == 1
+                        && highShot.getProjectiles().get(0).getY() == startingY,
+                "a projectile entirely above the wall keeps flying horizontally");
     }
 
     private static void testLongerCourses() {
@@ -564,6 +620,7 @@ public final class RunnerEngineChecks {
         testSpeedAndManualPause();
         testAntagonistGeneration();
         testAntagonistAndProjectiles();
+        testProjectileTerrainCollisions();
         testLongerCourses();
         System.out.println("RunnerEngine checks passed");
     }
