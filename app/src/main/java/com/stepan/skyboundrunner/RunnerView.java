@@ -22,7 +22,7 @@ public final class RunnerView extends View {
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int ENEMY = Color.rgb(222, 45, 54);
-    private static final int EMPTY_HEALTH = Color.rgb(131, 142, 151);
+    private static final int EMPTY_HEALTH = Color.rgb(218, 223, 227);
     private static final int INK = Color.rgb(20, 44, 94);
 
     private final RunnerEngine engine = new RunnerEngine();
