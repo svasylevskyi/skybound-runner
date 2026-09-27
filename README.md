@@ -1,13 +1,15 @@
 # Skybound Runner
 
-A lightweight Android side scroller prototype. The oval runner moves automatically; tap anywhere while running to jump. Raised yellow walls act as ledges. Jump onto them and across holes. Contact with a wall or a fall into a hole returns the runner to the beginning of the **same** course. Tapping Start on a fresh launch generates a new course.
+A lightweight Android side scroller prototype. The oval runner moves automatically; tap anywhere while running to jump. Raised yellow walls act as ledges, holes must be cleared, and shallow depressions can be jumped over or escaped after landing inside. Contact with a wall or a fall into a hole returns the runner to the beginning of the **same** course. Tapping Start on a fresh launch generates a new course.
 
 ## Playing
 
 1. Install the debug APK on an Android 6.0 (API 23) or newer device and launch **Skybound Runner**.
 2. Tap **Start**. The three second countdown begins.
-3. Tap anywhere to jump. A jump is available when standing on ground or a ledge.
-4. Send the app to the background and return to see **Continue**. It resumes the current run or the remaining countdown.
+3. Tap anywhere to jump. A jump is available when standing on ground, a ledge, or the floor of a depression. The far lip of a depression stops the runner until they jump out; it does not end the attempt.
+4. Tap the pause button in the top-right corner or send the app to the background. Tap **Continue** to resume the run or remaining countdown.
+
+The top row shows current distance, the best **completed** attempt to beat, current speed as a multiplier, and attempt number. Every three seconds spent moving increases speed slightly. A failed attempt records its distance and resets speed. Completed distances and the best score remain available after restarting the app.
 
 The game is designed for landscape orientation. It does not require internet access or any runtime permissions.
 

@@ -1,6 +1,7 @@
 package com.stepan.skyboundrunner;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Random;
 
@@ -9,16 +10,19 @@ public final class RunnerEngine {
     public static final float WORLD_HEIGHT = 540f;
     public static final float GROUND_Y = 400f;
     public static final float LEDGE_HEIGHT = 68f;
+    public static final float DIP_DEPTH = 58f;
     public static final float PLAYER_WIDTH = 32f;
     public static final float PLAYER_HEIGHT = 46f;
 
     private static final float START_X = 140f;
-    private static final float SPEED = 235f;
+    public static final float BASE_SPEED = 235f;
+    private static final float SPEED_STEP = 7f;
+    private static final float SPEED_INTERVAL_SECONDS = 3f;
     private static final float GRAVITY = 1080f;
     private static final float JUMP_VELOCITY = -490f;
 
     public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED }
-    public enum HazardType { HOLE, WALL }
+    public enum HazardType { HOLE, WALL, DIP }
 
     public static final class Hazard {
         public final HazardType type;
@@ -35,6 +39,7 @@ public final class RunnerEngine {
     }
 
     private final List<Hazard> hazards = new ArrayList<>();
+    private final List<Integer> completedAttemptDistances = new ArrayList<>();
     private Random random;
     private float nextHazardX;
     private long seed;
@@ -43,6 +48,8 @@ public final class RunnerEngine {
     private float playerY;
     private float velocityY;
     private float countdownSeconds;
+    private double elapsedRunSeconds;
+    private int bestDistance;
     private Mode mode = Mode.TITLE;
     private Mode resumeMode = Mode.RUNNING;
 
@@ -65,14 +72,21 @@ public final class RunnerEngine {
         playerX = START_X;
         playerY = GROUND_Y - PLAYER_HEIGHT;
         velocityY = 0f;
+        elapsedRunSeconds = 0d;
         generateAhead(1800f);
     }
 
     public void generateAhead(float worldX) {
         while (nextHazardX < worldX) {
-            HazardType type = random.nextBoolean() ? HazardType.HOLE : HazardType.WALL;
-            float width = type == HazardType.HOLE
-                    ? 92f + random.nextInt(27) : 105f + random.nextInt(38);
+            HazardType type = HazardType.values()[random.nextInt(HazardType.values().length)];
+            float width;
+            if (type == HazardType.HOLE) {
+                width = 92f + random.nextInt(27);
+            } else if (type == HazardType.WALL) {
+                width = 105f + random.nextInt(38);
+            } else {
+                width = 155f + random.nextInt(31);
+            }
             Hazard hazard = new Hazard(type, nextHazardX, width);
             hazards.add(hazard);
             // Clear ground between hazards leaves time for a fresh jump.
@@ -92,10 +106,10 @@ public final class RunnerEngine {
         for (Hazard hazard : hazards) {
             if (hazard.type == HazardType.WALL && playerX < hazard.end()
                     && playerX + PLAYER_WIDTH > hazard.x
-                    && Math.abs(feet - (GROUND_Y - LEDGE_HEIGHT)) < 1.2f) return true;
+                    && Math.abs(feet - (GROUND_Y - LEDGE_HEIGHT)) < 1.2f
+                    && velocityY >= 0f) return true;
         }
-        return !isHoleAt(center) && Math.abs(feet - GROUND_Y) < 1.2f
-                && velocityY >= 0f;
+        return Math.abs(feet - surfaceYAt(center)) < 1.2f && velocityY >= 0f;
     }
 
     public void update(float seconds) {
@@ -109,12 +123,34 @@ public final class RunnerEngine {
         }
         if (mode != Mode.RUNNING || seconds <= 0f) return;
 
-        float dt = Math.min(seconds, 1f / 30f);
+        float remaining = Math.min(seconds, .05f);
+        while (remaining > .000001f) {
+            float dt = Math.min(remaining, 1f / 120f);
+            if (advance(dt)) return;
+            remaining -= dt;
+        }
+    }
+
+    /** Returns true when a collision ended this attempt. */
+    private boolean advance(float dt) {
         generateAhead(playerX + 1600f);
+        float oldX = playerX;
         float oldFeet = playerY + PLAYER_HEIGHT;
-        playerX += SPEED * dt;
-        playerY += velocityY * dt + .5f * GRAVITY * dt * dt;
-        velocityY += GRAVITY * dt;
+        float pace = getSpeed() / BASE_SPEED;
+        playerX += getSpeed() * dt;
+        playerY += velocityY * pace * dt + .5f * GRAVITY * pace * pace * dt * dt;
+        velocityY += GRAVITY * pace * dt;
+
+        // The far lip of a depression blocks forward motion without ending the run.
+        for (Hazard hazard : hazards) {
+            if (hazard.type == HazardType.DIP && playerX < hazard.end()
+                    && playerX + PLAYER_WIDTH > hazard.end()
+                    && playerY + PLAYER_HEIGHT > GROUND_Y + 1f
+                    && playerY < GROUND_Y + DIP_DEPTH) {
+                playerX = hazard.end() - PLAYER_WIDTH;
+                break;
+            }
+        }
 
         float center = playerX + PLAYER_WIDTH / 2f;
         float feet = playerY + PLAYER_HEIGHT;
@@ -132,10 +168,10 @@ public final class RunnerEngine {
             }
         }
 
-        // The ground supports the runner everywhere except inside holes.
-        if (velocityY >= 0f && oldFeet <= GROUND_Y + 1f
-                && playerY + PLAYER_HEIGHT >= GROUND_Y && !isHoleAt(center)) {
-            landAt(GROUND_Y);
+        float surfaceY = surfaceYAt(center);
+        if (velocityY >= 0f && oldFeet <= surfaceY + 1f
+                && playerY + PLAYER_HEIGHT >= surfaceY) {
+            landAt(surfaceY);
         }
 
         for (Hazard hazard : hazards) {
@@ -144,12 +180,16 @@ public final class RunnerEngine {
                     && playerY + PLAYER_HEIGHT > GROUND_Y - LEDGE_HEIGHT + 1f
                     && playerY < GROUND_Y) {
                 restartAfterFailure();
-                return;
+                return true;
             }
         }
         if (playerY + PLAYER_HEIGHT > GROUND_Y + 75f) {
             restartAfterFailure();
+            return true;
         }
+        // Waiting at a dip's lip is not counted as running time.
+        if (playerX > oldX + .01f) elapsedRunSeconds += dt;
+        return false;
     }
 
     private void landAt(float top) {
@@ -157,21 +197,30 @@ public final class RunnerEngine {
         velocityY = 0f;
     }
 
-    private boolean isHoleAt(float center) {
+    private float surfaceYAt(float center) {
         for (Hazard hazard : hazards) {
-            if (hazard.type == HazardType.HOLE
-                    && center >= hazard.x && center < hazard.end()) return true;
+            if (center >= hazard.x && center < hazard.end()) {
+                if (hazard.type == HazardType.HOLE) return Float.NaN;
+                if (hazard.type == HazardType.DIP) return GROUND_Y + DIP_DEPTH;
+            }
         }
-        return false;
+        return GROUND_Y;
     }
 
     private void restartAfterFailure() {
+        int distance = getDistance();
+        completedAttemptDistances.add(distance);
+        bestDistance = Math.max(bestDistance, distance);
         attempts++;
         // Regenerate from the same seed so a failed attempt can be learned.
         resetCourse(seed);
     }
 
     public void pauseForBackground() {
+        pause();
+    }
+
+    public void pause() {
         if (mode == Mode.RUNNING || mode == Mode.COUNTDOWN) {
             resumeMode = mode;
             mode = Mode.PAUSED;
@@ -183,7 +232,7 @@ public final class RunnerEngine {
     }
 
     public void restore(long courseSeed, int savedAttempts, float x, float y,
-                        float vy, float remainingSeconds, Mode savedMode,
+                        float vy, float remainingSeconds, double savedRunSeconds, Mode savedMode,
                         Mode savedResumeMode) {
         resetCourse(courseSeed);
         generateAhead(x + 1800f);
@@ -192,6 +241,7 @@ public final class RunnerEngine {
         playerY = y;
         velocityY = vy;
         countdownSeconds = remainingSeconds;
+        elapsedRunSeconds = Math.max(0d, savedRunSeconds);
         if (savedMode == Mode.TITLE) {
             mode = Mode.TITLE;
         } else {
@@ -202,6 +252,20 @@ public final class RunnerEngine {
     }
 
     public List<Hazard> getHazards() { return hazards; }
+    public List<Integer> getCompletedAttemptDistances() {
+        return Collections.unmodifiableList(completedAttemptDistances);
+    }
+    public int getCompletedAttemptCount() { return completedAttemptDistances.size(); }
+    public void loadAttemptDistances(List<Integer> distances) {
+        completedAttemptDistances.clear();
+        bestDistance = 0;
+        for (int distance : distances) {
+            if (distance >= 0) {
+                completedAttemptDistances.add(distance);
+                bestDistance = Math.max(bestDistance, distance);
+            }
+        }
+    }
     public Mode getMode() { return mode; }
     public Mode getResumeMode() { return resumeMode; }
     public long getSeed() { return seed; }
@@ -210,5 +274,11 @@ public final class RunnerEngine {
     public float getPlayerY() { return playerY; }
     public float getVelocityY() { return velocityY; }
     public float getCountdownSeconds() { return countdownSeconds; }
+    public double getElapsedRunSeconds() { return elapsedRunSeconds; }
+    public float getSpeed() {
+        return BASE_SPEED + SPEED_STEP
+                * (int) Math.floor((elapsedRunSeconds + .000001d) / SPEED_INTERVAL_SECONDS);
+    }
+    public int getBestDistance() { return bestDistance; }
     public int getDistance() { return Math.max(0, (int) (playerX - START_X) / 10); }
 }
