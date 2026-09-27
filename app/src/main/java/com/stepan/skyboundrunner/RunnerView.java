@@ -20,7 +20,8 @@ public final class RunnerView extends View {
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
-    private static final int ENEMY = Color.rgb(222, 45, 54);
+    private static final int ENEMY_RED = Color.rgb(222, 45, 54);
+    private static final int ENEMY_ORANGE = Color.rgb(242, 123, 32);
     private static final int LIFE_RED = Color.rgb(222, 45, 54);
     private static final int LIFE_GRAY = Color.rgb(146, 151, 159);
     private static final int EMPTY_HEALTH = Color.argb(128, 218, 223, 227);
@@ -76,12 +77,15 @@ public final class RunnerView extends View {
         float cameraX = Math.max(0f, engine.getPlayerX() - logicalWidth * .30f);
         engine.generateAhead(cameraX + logicalWidth + 550f);
         drawWorld(canvas, cameraX);
+        drawBonuses(canvas, cameraX);
         drawHud(canvas);
         drawMenu(canvas);
         canvas.restore();
 
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
-                || engine.getMode() == RunnerEngine.Mode.COUNTDOWN) {
+                || engine.getMode() == RunnerEngine.Mode.COUNTDOWN
+                || (engine.getMode() == RunnerEngine.Mode.GAME_OVER
+                && !engine.getBonusPopups().isEmpty())) {
             postInvalidateOnAnimation();
         }
     }
@@ -115,21 +119,40 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
-        paint.setColor(ENEMY);
         for (RunnerEngine.Antagonist antagonist : engine.getAntagonists()) {
             if (antagonist.x + RunnerEngine.PLAYER_WIDTH < cameraX) continue;
             if (antagonist.x > right) break;
+            paint.setColor(enemyColor(antagonist.type));
             canvas.drawOval(antagonist.x, antagonist.y,
                     antagonist.x + RunnerEngine.PLAYER_WIDTH,
                     antagonist.y + RunnerEngine.PLAYER_HEIGHT, paint);
         }
         for (RunnerEngine.Projectile shot : engine.getProjectiles()) {
+            paint.setColor(enemyColor(shot.type));
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
         paint.setColor(AVATAR);
         canvas.drawOval(engine.getPlayerX(), engine.getPlayerY(),
                 engine.getPlayerX() + RunnerEngine.PLAYER_WIDTH,
                 engine.getPlayerY() + RunnerEngine.PLAYER_HEIGHT, paint);
+        canvas.restore();
+    }
+
+    private int enemyColor(RunnerEngine.EnemyType type) {
+        return type == RunnerEngine.EnemyType.MOVING ? ENEMY_RED : ENEMY_ORANGE;
+    }
+
+    private void drawBonuses(Canvas canvas, float cameraX) {
+        canvas.save();
+        canvas.translate(-cameraX, 0f);
+        for (RunnerEngine.BonusPopup popup : engine.getBonusPopups()) {
+            float progress = popup.getProgress();
+            int color = enemyColor(popup.type);
+            int fadedColor = Color.argb(Math.round(255f * (1f - progress)),
+                    Color.red(color), Color.green(color), Color.blue(color));
+            text(canvas, "+" + popup.amount, popup.x, popup.y - 14f - 40f * progress,
+                    25f, fadedColor, Paint.Align.CENTER);
+        }
         canvas.restore();
     }
 
@@ -352,7 +375,10 @@ public final class RunnerView extends View {
         out.putBoolean("jumpInProgress", engine.isControlledJumpInProgress());
         out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
         out.putFloatArray("antagonistTimers", engine.getAntagonistTimers());
+        out.putFloatArray("antagonistState", engine.getAntagonistState());
         out.putFloatArray("projectiles", engine.getProjectileState());
+        out.putFloatArray("coloredProjectiles", engine.getColoredProjectileState());
+        out.putFloatArray("bonusPopups", engine.getBonusPopupState());
         out.putString("mode", engine.getMode().name());
         out.putString("resumeMode", engine.getResumeMode().name());
     }
@@ -377,7 +403,10 @@ public final class RunnerView extends View {
                     saved.getFloatArray("defeatedAntagonists"),
                     saved.getInt("bonusMeters", 0),
                     saved.getBoolean("firstJumpCompleted", false),
-                    saved.getBoolean("jumpInProgress", false));
+                    saved.getBoolean("jumpInProgress", false),
+                    saved.getFloatArray("antagonistState"),
+                    saved.getFloatArray("coloredProjectiles"));
+            engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }

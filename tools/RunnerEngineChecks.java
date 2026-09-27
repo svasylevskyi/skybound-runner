@@ -563,6 +563,192 @@ public final class RunnerEngineChecks {
         throw new AssertionError("no enemy found with room for a collision check");
     }
 
+    private static RunnerEngine movingEnemyOnOpenGround(float lead, boolean jumpingAtFirstShot) {
+        for (long trial = 0; trial < 300; trial++) {
+            long seed = trial * 0x9E3779B97F4A7C15L;
+            RunnerEngine game = new RunnerEngine();
+            game.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(45_000f);
+            for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
+                if (foe.type != RunnerEngine.EnemyType.MOVING
+                        || foe.spawnX - lead < 12140f) continue;
+                if (!openGround(game, foe.spawnX - 80f, foe.spawnX + 80f)
+                        || (!jumpingAtFirstShot && !openGround(game,
+                        foe.spawnX - lead - 10f, foe.spawnX - lead + 20f))) continue;
+                if (jumpingAtFirstShot) {
+                    float[] state = enemyStateFor(game, foe.spawnX);
+                    if (state[5] < .4f || state[5] > .6f) continue;
+                }
+                game.restore(seed, RunnerEngine.MAX_LIVES, foe.spawnX - lead,
+                        jumpingAtFirstShot ? -150f
+                                : RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                        0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+                game.continueGame();
+                check(game.getAntagonists().stream().anyMatch(e -> e.spawnX == foe.spawnX
+                                && e.type == RunnerEngine.EnemyType.MOVING),
+                        "same moving enemy appears after course restoration");
+                return game;
+            }
+        }
+        throw new AssertionError("no moving enemy found on open ground");
+    }
+
+    private static float[] enemyStateFor(RunnerEngine game, float spawnX) {
+        float[] state = game.getAntagonistState();
+        for (int i = 0; i + 8 < state.length; i += 9) {
+            if (Math.abs(state[i] - spawnX) < .1f) {
+                float[] oneEnemy = new float[9];
+                System.arraycopy(state, i, oneEnemy, 0, 9);
+                return oneEnemy;
+            }
+        }
+        throw new AssertionError("moving enemy state not found");
+    }
+
+    private static void testMovingEnemyGenerationAndBehavior() {
+        boolean sawMoving = false;
+        boolean sawStationary = false;
+        for (long seed = 0; seed < 30; seed++) {
+            RunnerEngine game = new RunnerEngine();
+            game.restore(seed, RunnerEngine.MAX_LIVES, 12139f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(50_000f);
+            check(game.getAntagonists().stream().noneMatch(e ->
+                            e.type == RunnerEngine.EnemyType.MOVING || e.spawnX >= 12140f),
+                    "moving enemies do not appear before 1200 physical metres");
+
+            game.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(50_000f);
+            float lastSpawnX = Float.NEGATIVE_INFINITY;
+            for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
+                sawMoving |= foe.type == RunnerEngine.EnemyType.MOVING;
+                sawStationary |= foe.type == RunnerEngine.EnemyType.STATIONARY
+                        && foe.spawnX >= 12140f;
+                check(foe.type != RunnerEngine.EnemyType.MOVING || foe.spawnX >= 12140f,
+                        "moving enemy spawns beyond the unlock point");
+                check(foe.spawnX - lastSpawnX > game.getVisibleWorldWidth()
+                                + RunnerEngine.PLAYER_WIDTH + 100f,
+                        "enemies remain spaced even when both patrol towards each other");
+                lastSpawnX = foe.spawnX;
+            }
+        }
+        check(sawMoving && sawStationary, "both enemy types appear after 1200 metres");
+
+        RunnerEngine game = movingEnemyOnOpenGround(350f, true);
+        RunnerEngine.Antagonist foe = game.getAntagonists().stream()
+                .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
+                        && e.spawnX > game.getPlayerX()).findFirst().get();
+        float spawnX = foe.spawnX;
+        float maxRise = 0f;
+        boolean moved = false;
+        for (int step = 0; step < 120 && game.getProjectiles().isEmpty(); step++) {
+            game.update(1f / 120f);
+            moved |= Math.abs(foe.x - spawnX) > .1f;
+            check(Math.abs(foe.x - spawnX) <= 50.01f,
+                    "moving enemy stays within five metres of its spawn point");
+            float rise = RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT - foe.y;
+            maxRise = Math.max(maxRise, rise);
+            check(rise <= 22.4f, "moving enemy jump stays at 20% of player jump height");
+        }
+        check(moved && maxRise > 10f,
+                "moving enemy patrols and makes a small random jump");
+        check(!game.getProjectiles().isEmpty(), "moving enemy shoots while jumping");
+        RunnerEngine.Projectile shot = game.getProjectiles().get(0);
+        check(shot.type == RunnerEngine.EnemyType.MOVING
+                        && Math.abs(shot.getY() - foe.y - RunnerEngine.PLAYER_HEIGHT / 2f) < .1f
+                        && shot.getY() < RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT / 2f,
+                "red projectile launches horizontally at the airborne enemy's height");
+
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
+                game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                game.getMode(), game.getResumeMode(), game.getHealth(),
+                game.getDamageRecoverySeconds(), game.getFarthestX(),
+                game.getVisibleWorldWidth(), game.getAntagonistTimers(),
+                game.getProjectileState(), game.getDefeatedAntagonists(),
+                game.getBonusMeters(), game.hasCompletedFirstJump(),
+                game.isControlledJumpInProgress(), game.getAntagonistState(),
+                game.getColoredProjectileState());
+        float[] before = enemyStateFor(game, spawnX);
+        float[] after = enemyStateFor(restored, spawnX);
+        check(restored.getMode() == RunnerEngine.Mode.PAUSED
+                        && Math.abs(before[1] - after[1]) < .01f
+                        && Math.abs(before[6] - after[6]) < .01f
+                        && restored.getProjectiles().get(0).type == RunnerEngine.EnemyType.MOVING
+                        && restored.getProjectiles().get(0).getY() == shot.getY(),
+                "restoration preserves patrol position, jump and red projectile color");
+        restored.update(.5f);
+        check(enemyStateFor(restored, spawnX)[1] == after[1],
+                "paused moving enemy stays in place");
+        restored.continueGame();
+        restored.update(1f / 120f);
+        check(restored.getProjectiles().get(0).getY() == shot.getY(),
+                "mid-jump projectile keeps its original height after resuming");
+    }
+
+    private static void testMovingEnemyCollisions() {
+        RunnerEngine hit = movingEnemyOnOpenGround(25f, false);
+        RunnerEngine.Antagonist foe = hit.getAntagonists().stream()
+                .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
+                        && e.spawnX > hit.getPlayerX()).findFirst().get();
+        float contactX = foe.spawnX - 20f;
+        hit.restore(hit.getSeed(), RunnerEngine.MAX_LIVES, contactX,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        hit.continueGame();
+        hit.update(1f / 120f);
+        check(hit.getHealth() == RunnerEngine.MAX_HEALTH - 2
+                        && hit.getLives() == RunnerEngine.MAX_LIVES
+                        && hit.getBonusMeters() == 1
+                        && hit.getDefeatedAntagonists()[0] == foe.spawnX
+                        && hit.getBonusPopups().get(0).type == RunnerEngine.EnemyType.MOVING,
+                "body contact removes red enemy, costs two health and shows red +1");
+        RunnerEngine restoredHit = new RunnerEngine();
+        restoredHit.restore(hit.getSeed(), hit.getLives(), hit.getPlayerX(),
+                hit.getPlayerY(), hit.getVelocityY(), hit.getCountdownSeconds(),
+                hit.getElapsedRunSeconds(), hit.getTerrainSpeedMultiplier(),
+                hit.getMode(), hit.getResumeMode(), hit.getHealth(),
+                hit.getDamageRecoverySeconds(), hit.getFarthestX(),
+                hit.getVisibleWorldWidth(), hit.getAntagonistTimers(),
+                hit.getProjectileState(), hit.getDefeatedAntagonists(),
+                hit.getBonusMeters(), hit.hasCompletedFirstJump(),
+                hit.isControlledJumpInProgress(), hit.getAntagonistState(),
+                hit.getColoredProjectileState());
+        restoredHit.generateAhead(45_000f);
+        check(restoredHit.getAntagonists().stream().noneMatch(e -> e.spawnX == foe.spawnX),
+                "defeated moving enemy does not return after activity restoration");
+
+        RunnerEngine stomp = movingEnemyOnOpenGround(25f, false);
+        RunnerEngine.Antagonist stompFoe = stomp.getAntagonists().stream()
+                .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
+                        && e.spawnX > stomp.getPlayerX()).findFirst().get();
+        float stompX = stompFoe.spawnX - 20f;
+        float feet = stompFoe.y + RunnerEngine.PLAYER_HEIGHT / 4f - .5f;
+        stomp.restore(stomp.getSeed(), RunnerEngine.MAX_LIVES, stompX,
+                feet - RunnerEngine.PLAYER_HEIGHT, 150f, 0f, 0d, 1f,
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        stomp.continueGame();
+        stomp.update(1f / 120f);
+        check(stomp.getHealth() == RunnerEngine.MAX_HEALTH
+                        && stomp.getLives() == RunnerEngine.MAX_LIVES
+                        && stomp.getBonusMeters() == 2
+                        && stomp.getBonusPopups().get(0).amount == 2
+                        && stomp.getBonusPopups().get(0).type == RunnerEngine.EnemyType.MOVING,
+                "landing on red enemy gives red +2 without damage");
+        float[] popupState = stomp.getBonusPopupState();
+        RunnerEngine restored = new RunnerEngine();
+        restored.restoreBonusPopups(popupState);
+        check(restored.getBonusPopups().size() == 1
+                        && restored.getBonusPopups().get(0).getProgress() == 0f,
+                "rising bonus label survives activity recreation");
+    }
+
     private static void testAntagonistGeneration() {
         boolean sawGround = false;
         boolean sawLedge = false;
@@ -649,6 +835,22 @@ public final class RunnerEngineChecks {
                         && stomp.getDistance() == (int) ((stomp.getFarthestX() - 140f)
                         / RunnerEngine.WORLD_UNITS_PER_METER) + 2,
                 "stomp awards two bonus metres without changing health, lives or speed");
+        check(stomp.getBonusPopups().size() == 1
+                        && stomp.getBonusPopups().get(0).amount == 2
+                        && stomp.getBonusPopups().get(0).type == RunnerEngine.EnemyType.STATIONARY
+                        && Math.abs(stomp.getBonusPopups().get(0).x
+                        - foe.x - RunnerEngine.PLAYER_WIDTH / 2f) < .01f,
+                "stomp shows a +2 bonus at the orange enemy's position");
+        stomp.pause();
+        stomp.update(.5f);
+        check(stomp.getBonusPopups().get(0).getProgress() == 0f,
+                "bonus label freezes while paused");
+        stomp.continueGame();
+        stomp.update(.3f);
+        check(stomp.getBonusPopups().get(0).getProgress() > .3f,
+                "bonus label animates when play resumes");
+        stomp.update(1f);
+        check(stomp.getBonusPopups().isEmpty(), "bonus label disappears after rising");
 
         RunnerEngine justBelow = enemyOnOpenGround(130f);
         RunnerEngine.Antagonist lowerFoe = justBelow.getAntagonists().stream()
@@ -688,6 +890,10 @@ public final class RunnerEngineChecks {
                         && game.getMode() == RunnerEngine.Mode.RUNNING
                         && game.getBonusMeters() == 1,
                 "running into an oval costs two health and awards one bonus metre");
+        check(game.getBonusPopups().size() == 1
+                        && game.getBonusPopups().get(0).amount == 1
+                        && game.getBonusPopups().get(0).type == RunnerEngine.EnemyType.STATIONARY,
+                "collision shows a +1 label in the orange enemy's color");
         check(game.getPlayerX() > approachX
                         && game.getSpeed() == previousSpeed,
                 "enemy collision does not interrupt movement or reset speed");
@@ -759,7 +965,9 @@ public final class RunnerEngineChecks {
             shooter.update(1f / 120f);
         }
         check(!shooter.getProjectiles().isEmpty(),
-                "visible enemy fires a moving red dot towards the runner");
+                "visible stationary enemy fires a moving orange dot towards the runner");
+        check(shooter.getProjectiles().get(0).type == RunnerEngine.EnemyType.STATIONARY,
+                "stationary enemy projectile keeps its orange type");
         float[] shots = shooter.getProjectileState();
         check(shots[2] < 0f && shots[3] == 0f,
                 "projectile travels left with no vertical velocity");
@@ -903,7 +1111,9 @@ public final class RunnerEngineChecks {
         testSpeedAndManualPause();
         testWallLifeLossAndCountdown();
         testAntagonistGeneration();
+        testMovingEnemyGenerationAndBehavior();
         testEnemyStomp();
+        testMovingEnemyCollisions();
         testAntagonistAndProjectiles();
         testProjectileTerrainCollisions();
         testLongerCourses();
