@@ -192,7 +192,7 @@ public final class RunnerView extends View {
     }
 
     private void drawHealth(Canvas canvas) {
-        float left = logicalWidth / 2f - 9f * 12f;
+        float left = logicalWidth - 133f - 9f * 6f;
         for (int i = 0; i < RunnerEngine.MAX_HEALTH; i++) {
             float ratio = i / (float) (RunnerEngine.MAX_HEALTH - 1);
             int red = Math.round(230f * (1f - ratio) + 45f * ratio);
@@ -200,7 +200,7 @@ public final class RunnerView extends View {
             int blue = Math.round(53f * (1f - ratio) + 68f * ratio);
             paint.setColor(i < engine.getHealth()
                     ? Color.rgb(red, green, blue) : EMPTY_HEALTH);
-            canvas.drawCircle(left + i * 24f, 79f, 9f, paint);
+            canvas.drawCircle(left + i * 12f, 53f, 4.5f, paint);
         }
     }
 
@@ -366,6 +366,7 @@ public final class RunnerView extends View {
         out.putFloat("countdown", engine.getCountdownSeconds());
         out.putDouble("elapsedRun", engine.getElapsedRunSeconds());
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
+        out.putBoolean("waitingForJump", engine.isWaitingForJump());
         out.putInt("health", engine.getHealth());
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
         out.putFloatArray("defeatedAntagonists", engine.getDefeatedAntagonists());
@@ -406,6 +407,7 @@ public final class RunnerView extends View {
                     saved.getBoolean("jumpInProgress", false),
                     saved.getFloatArray("antagonistState"),
                     saved.getFloatArray("coloredProjectiles"));
+            engine.restoreTerrainStop(saved.getBoolean("waitingForJump", false));
             engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
