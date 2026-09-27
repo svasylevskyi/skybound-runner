@@ -83,6 +83,10 @@ public final class RunnerEngineChecks {
                 check(game.getAttempts() == 1, "well timed jump clears first hazard (seed "
                         + seed + ", " + first.type + ", beforeX=" + beforeX + ", beforeY="
                         + beforeY + ", wall=" + first.x + ".." + first.end() + ")");
+                if (first.type != RunnerEngine.HazardType.DIP) {
+                    check(game.getHealth() == RunnerEngine.MAX_HEALTH,
+                            "timed jump avoids damage on a ledge or hole: seed=" + seed);
+                }
             }
             check(jumped, "jump was exercised");
             check(game.getPlayerX() > first.end() + 50f, "first obstacle cleared");
@@ -114,9 +118,7 @@ public final class RunnerEngineChecks {
             RunnerEngine.Hazard first = game.getHazards().get(0);
             RunnerEngine.Hazard second = game.getHazards().get(1);
             if (first.type == RunnerEngine.HazardType.WALL && first.entranceDegrees == 0
-                    && (second.type == RunnerEngine.HazardType.HOLE
-                    || second.type == RunnerEngine.HazardType.WALL
-                    && second.entranceDegrees == 0)) return seed;
+                    && second.type == RunnerEngine.HazardType.HOLE) return seed;
         }
         throw new AssertionError("no suitable course for score checks");
     }
@@ -196,7 +198,8 @@ public final class RunnerEngineChecks {
         boolean climbedOut = false;
         for (int step = 0; step < 1500 && !climbedOut; ++step) {
             verticalEntry.update(1f / 120f);
-            check(verticalEntry.getAttempts() == 1,
+            check(verticalEntry.getAttempts() == 1
+                            && verticalEntry.getHealth() == RunnerEngine.MAX_HEALTH,
                     "vertical drop into a depression remains harmless");
             if (verticalEntry.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f
                     > dip.end() + 40f) climbedOut = true;
@@ -228,32 +231,59 @@ public final class RunnerEngineChecks {
     private static void testDepression() {
         RunnerEngine game = started(seedFor(RunnerEngine.HazardType.DIP));
         RunnerEngine.Hazard dip = game.getHazards().get(0);
-        for (int step = 0; step < 1000 && game.getPlayerX() < dip.end() -
-                RunnerEngine.PLAYER_WIDTH - 1f; ++step) game.update(1f / 120f);
-        float lipX = dip.end() - RunnerEngine.PLAYER_WIDTH;
-        for (int step = 0; step < 120; ++step) game.update(1f / 120f);
-        check(game.getAttempts() == 1, "falling into a depression causes no damage");
-        check(Math.abs(game.getPlayerX() - lipX) < .1f, "runner stops at the far lip");
+        for (int step = 0; step < 1000 && game.getHealth() == RunnerEngine.MAX_HEALTH;
+                ++step) game.update(1f / 120f);
+        check(game.getAttempts() == 1 && game.getHealth() == RunnerEngine.MAX_HEALTH - 1,
+                "vertical far lip costs one health point without restarting");
+        check(game.getPlayerX() < dip.end() - RunnerEngine.PLAYER_WIDTH - 50f,
+                "far lip pushes the runner back for a jump");
         check(Math.abs(game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT -
                 (RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH)) < .1f,
                 "runner stands on the depression floor");
-        double waitingTime = game.getElapsedRunSeconds();
-        for (int step = 0; step < 600; ++step) game.update(1f / 120f);
-        check(game.getElapsedRunSeconds() == waitingTime,
-                "waiting for a jump does not increase speed");
         game.jump();
         for (int step = 0; step < 120; ++step) game.update(1f / 120f);
-        check(game.getPlayerX() > dip.end() + 40f && game.getAttempts() == 1,
+        check(game.getPlayerX() > dip.end() + 40f && game.getAttempts() == 1
+                        && game.getHealth() == RunnerEngine.MAX_HEALTH - 1,
                 "a jump from the depression floor gets the runner out");
     }
 
     private static void testFailureAndPause() {
         RunnerEngine game = started(seedForTwoFailures());
-        for (int i = 0; i < 600 && game.getAttempts() == 1; ++i) {
+        RunnerEngine.Hazard wall = game.getHazards().get(0);
+        for (int i = 0; i < 600 && game.getHealth() == RunnerEngine.MAX_HEALTH; ++i) {
             game.update(1f / 60f);
         }
-        check(game.getAttempts() == 2, "failing a hazard starts next attempt");
+        check(game.getAttempts() == 1 && game.getHealth() == RunnerEngine.MAX_HEALTH - 1,
+                "first wall collision only costs one health point");
+        check(game.getPlayerX() < wall.x - RunnerEngine.PLAYER_WIDTH - 50f,
+                "ledge collision pushes runner back for a jump");
+        int farthest = game.getDistance();
+        for (int i = 0; i < 30; ++i) game.update(1f / 120f);
+        check(game.getDistance() >= farthest,
+                "distance keeps the farthest progress after recoil");
+        check(game.getHealth() == RunnerEngine.MAX_HEALTH - 1,
+                "brief damage protection avoids multiple hits per collision");
+        RunnerEngine woundedRestored = new RunnerEngine();
+        woundedRestored.restore(game.getSeed(), game.getAttempts(), game.getPlayerX(),
+                game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                game.getMode(), game.getResumeMode(), game.getHealth(),
+                game.getDamageRecoverySeconds(), game.getFarthestX(),
+                game.getVisibleWorldWidth(), game.getAntagonistTimers(),
+                game.getProjectileState());
+        check(woundedRestored.getMode() == RunnerEngine.Mode.PAUSED
+                        && woundedRestored.getHealth() == game.getHealth()
+                        && woundedRestored.getDamageRecoverySeconds()
+                        == game.getDamageRecoverySeconds()
+                        && woundedRestored.getDistance() == game.getDistance(),
+                "pausing and restoring preserves lost health, recovery, and progress");
+        for (int i = 0; i < 2000 && game.getAttempts() == 1; ++i) {
+            game.update(1f / 120f);
+        }
+        check(game.getAttempts() == 2, "zero health begins the next attempt");
         check(game.getPlayerX() == 140f, "failure moves player to start");
+        check(game.getHealth() == RunnerEngine.MAX_HEALTH,
+                "new attempt restores all ten health points");
         check(game.getMode() == RunnerEngine.Mode.RUNNING, "restart resumes running");
         check(game.getCompletedAttemptDistances().size() == 1,
                 "failed attempt's run distance is recorded");
@@ -345,12 +375,162 @@ public final class RunnerEngineChecks {
         check(game.getSpeed() > speed, "another increase occurs after six seconds");
     }
 
+    private static float surfaceAt(RunnerEngine game, float x) {
+        for (RunnerEngine.Hazard hazard : game.getHazards()) {
+            if (hazard.x > x) break;
+            if (x < hazard.end()) return hazard.surfaceYAt(x);
+        }
+        return RunnerEngine.GROUND_Y;
+    }
+
+    private static boolean openGround(RunnerEngine game, float from, float to) {
+        for (RunnerEngine.Hazard hazard : game.getHazards()) {
+            if (hazard.x >= to) break;
+            if (hazard.end() > from) return false;
+        }
+        return true;
+    }
+
+    private static RunnerEngine enemyOnOpenGround(float lead) {
+        for (long trial = 0; trial < 200; trial++) {
+            long seed = trial * 0x9E3779B97F4A7C15L;
+            RunnerEngine game = new RunnerEngine();
+            game.restore(seed, 1, 5140f, RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(40_000f);
+            for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
+                if (openGround(game, foe.x - lead - 10f, foe.x + 16f)) {
+                    float enemyX = foe.x;
+                    game.restore(seed, 1, enemyX - lead,
+                            RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                            0f, 0f, 0d, 1f,
+                            RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+                    game.continueGame();
+                    check(game.getAntagonists().stream().anyMatch(e -> e.x == enemyX),
+                            "enemy stays at the same position after restoration");
+                    return game;
+                }
+            }
+        }
+        throw new AssertionError("no enemy found with room for a collision check");
+    }
+
+    private static void testAntagonistGeneration() {
+        boolean sawGround = false;
+        boolean sawLedge = false;
+        boolean sawDepression = false;
+        boolean sawSlope = false;
+        for (long seed = 0; seed < 35; seed++) {
+            RunnerEngine game = started(seed);
+            game.setVisibleWorldWidth(1240f);
+            game.generateAhead(80_000f);
+            check(game.getAntagonists().isEmpty(), "enemies stay absent before 500 m");
+            game.restore(seed, 1, 5139f, RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(80_000f);
+            check(game.getAntagonists().isEmpty(), "enemies stay absent just before 500 m");
+            game.restore(seed, 1, 5140f, RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(80_000f);
+            float lastX = Float.NEGATIVE_INFINITY;
+            for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
+                check(foe.x >= 5140f, "enemy first appears beyond 500 m");
+                check(foe.x - lastX > game.getVisibleWorldWidth() + RunnerEngine.PLAYER_WIDTH,
+                        "at most one enemy fits on screen at a time");
+                float center = foe.x + RunnerEngine.PLAYER_WIDTH / 2f;
+                float surface = surfaceAt(game, center);
+                check(!Float.isNaN(surface)
+                                && Math.abs(foe.y + RunnerEngine.PLAYER_HEIGHT - surface) < .1f,
+                        "enemy stands on ground, not in a hole");
+                if (Math.abs(surface - RunnerEngine.GROUND_Y) < .1f) sawGround = true;
+                for (RunnerEngine.Hazard hazard : game.getHazards()) {
+                    if (hazard.x > center) break;
+                    if (center < hazard.end()) {
+                        sawLedge |= hazard.type == RunnerEngine.HazardType.WALL;
+                        sawDepression |= hazard.type == RunnerEngine.HazardType.DIP;
+                        sawSlope |= hazard.slopeDegreesAt(center) != 0;
+                        break;
+                    }
+                }
+                lastX = foe.x;
+            }
+        }
+        check(sawGround && sawLedge && sawDepression && sawSlope,
+                "enemies can appear on ground, ledges, depressions, and inclines");
+    }
+
+    private static void testAntagonistAndProjectiles() {
+        RunnerEngine game = enemyOnOpenGround(130f);
+        float enemyX = game.getAntagonists().stream()
+                .filter(e -> e.x > game.getPlayerX()).findFirst().get().x;
+        for (int step = 0; step < 300 && game.getHealth() == RunnerEngine.MAX_HEALTH;
+                step++) game.update(1f / 120f);
+        check(game.getHealth() == RunnerEngine.MAX_HEALTH - 1 && game.getAttempts() == 1,
+                "touching a stationary oval takes one health point without restarting");
+        check(game.getPlayerX() < enemyX - RunnerEngine.PLAYER_WIDTH - 50f,
+                "oval impact leaves room to jump over it");
+        game.jump();
+        for (int step = 0; step < 120 && game.getPlayerX() < enemyX + 50f;
+                step++) game.update(1f / 120f);
+        check(game.getPlayerX() > enemyX + 40f && game.getAttempts() == 1
+                        && game.getHealth() == RunnerEngine.MAX_HEALTH - 1,
+                "well timed jump clears the oval after recoil");
+
+        RunnerEngine shooter = enemyOnOpenGround(330f);
+        enemyX = shooter.getAntagonists().stream()
+                .filter(e -> e.x > shooter.getPlayerX()).findFirst().get().x;
+        for (int step = 0; step < 120 && shooter.getProjectiles().isEmpty(); step++) {
+            shooter.update(1f / 120f);
+        }
+        check(!shooter.getProjectiles().isEmpty(),
+                "visible enemy fires a moving red dot towards the runner");
+        float[] shots = shooter.getProjectileState();
+        float[] timers = shooter.getAntagonistTimers();
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(shooter.getSeed(), shooter.getAttempts(),
+                shooter.getPlayerX(), shooter.getPlayerY(), shooter.getVelocityY(),
+                shooter.getCountdownSeconds(), shooter.getElapsedRunSeconds(),
+                shooter.getTerrainSpeedMultiplier(), shooter.getMode(), shooter.getResumeMode(),
+                shooter.getHealth(), shooter.getDamageRecoverySeconds(),
+                shooter.getFarthestX(), shooter.getVisibleWorldWidth(), timers, shots);
+        check(restored.getMode() == RunnerEngine.Mode.PAUSED
+                        && restored.getProjectileState().length == shots.length
+                        && Math.abs(restored.getProjectileState()[0] - shots[0]) < .01f,
+                "pause restoration keeps in-flight projectiles");
+        restored.update(1f);
+        check(restored.getProjectileState()[0] == shots[0],
+                "paused projectiles do not move");
+        restored.continueGame();
+        restored.update(1f / 120f);
+        shooter.update(1f / 120f);
+        check(Math.abs(restored.getProjectileState()[0]
+                - shooter.getProjectileState()[0]) < .01f,
+                "restored projectile continues on the original trajectory");
+
+        for (int step = 0; step < 240 && shooter.getHealth() == RunnerEngine.MAX_HEALTH;
+                step++) shooter.update(1f / 120f);
+        check(shooter.getHealth() == RunnerEngine.MAX_HEALTH - 1
+                        && shooter.getPlayerX() < enemyX - RunnerEngine.PLAYER_WIDTH - 30f,
+                "a projectile costs one health point before the oval is reached");
+        check(shooter.getVelocityY() < 0f && shooter.getVelocityY() > -300f,
+                "projectile hit starts a small bounce rather than a full jump");
+        float hitY = shooter.getPlayerY();
+        float highestY = hitY;
+        for (int step = 0; step < 26; step++) {
+            shooter.update(1f / 120f);
+            highestY = Math.min(highestY, shooter.getPlayerY());
+        }
+        check(hitY - highestY > 10f && hitY - highestY < 30f,
+                "projectile bounce rises much less than a controlled jump");
+    }
+
     private static void testLongerCourses() {
         for (long trial = 0; trial < 40; ++trial) {
             RunnerEngine game = started(trial * 0x9E3779B97F4A7C15L);
             int cleared = 0;
             boolean jumped = false;
-            for (int step = 0; step < 15_000 && cleared < 12; ++step) {
+            // Stay below 500 m so this checks terrain before enemy encounters begin.
+            for (int step = 0; step < 15_000 && cleared < 6; ++step) {
                 RunnerEngine.Hazard hazard = game.getHazards().get(cleared);
                 float lead = jumpLead(hazard.type);
                 if (!jumped && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
@@ -371,7 +551,7 @@ public final class RunnerEngineChecks {
                     jumped = false;
                 }
             }
-            check(cleared == 12, "twelve obstacles cleared per course");
+            check(cleared == 6, "six early obstacles cleared per course");
         }
     }
 
@@ -382,6 +562,8 @@ public final class RunnerEngineChecks {
         testDepression();
         testFailureAndPause();
         testSpeedAndManualPause();
+        testAntagonistGeneration();
+        testAntagonistAndProjectiles();
         testLongerCourses();
         System.out.println("RunnerEngine checks passed");
     }

@@ -14,8 +14,16 @@ public final class RunnerEngine {
     public static final float WORLD_UNITS_PER_METER = 10f;
     public static final float PLAYER_WIDTH = 32f;
     public static final float PLAYER_HEIGHT = 46f;
+    public static final int MAX_HEALTH = 10;
+    public static final float PROJECTILE_RADIUS = 6f;
 
     private static final float START_X = 140f;
+    private static final float ENEMY_START_DISTANCE = 500f * WORLD_UNITS_PER_METER;
+    private static final float RECOIL_DISTANCE = 72f;
+    private static final float DAMAGE_RECOVERY_SECONDS = .65f;
+    private static final float SHOT_INTERVAL_SECONDS = 1.5f;
+    private static final float SHOT_SPEED = 380f;
+    private static final float SHOT_BOUNCE_VELOCITY = -200f;
     public static final float BASE_SPEED = 235f;
     private static final float SPEED_STEP = 7f;
     private static final float SPEED_INTERVAL_SECONDS = 3f;
@@ -83,15 +91,51 @@ public final class RunnerEngine {
         }
     }
 
+    public static final class Antagonist {
+        public final float x;
+        public final float y;
+        private float shotTimer = .75f;
+
+        private Antagonist(float x, float y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+
+    public static final class Projectile {
+        private float x;
+        private float y;
+        private final float vx;
+        private final float vy;
+
+        private Projectile(float x, float y, float vx, float vy) {
+            this.x = x;
+            this.y = y;
+            this.vx = vx;
+            this.vy = vy;
+        }
+
+        public float getX() { return x; }
+        public float getY() { return y; }
+    }
+
     private final List<Hazard> hazards = new ArrayList<>();
+    private final List<Antagonist> antagonists = new ArrayList<>();
+    private final List<Projectile> projectiles = new ArrayList<>();
     private final List<Integer> completedAttemptDistances = new ArrayList<>();
     private Random random;
+    private Random antagonistRandom;
     private float nextHazardX;
+    private float nextAntagonistX;
+    private float visibleWorldWidth = 960f;
     private long seed;
     private int attempts;
     private float playerX;
+    private float farthestX;
     private float playerY;
     private float velocityY;
+    private int health = MAX_HEALTH;
+    private float damageRecoverySeconds;
     private float countdownSeconds;
     private double elapsedRunSeconds;
     private float terrainSpeedMultiplier = 1f;
@@ -113,11 +157,19 @@ public final class RunnerEngine {
     private void resetCourse(long courseSeed) {
         seed = courseSeed;
         random = new Random(seed);
+        antagonistRandom = new Random(seed ^ 0x6A09E667F3BCC909L);
         hazards.clear();
+        antagonists.clear();
+        projectiles.clear();
         nextHazardX = 840f;
+        nextAntagonistX = START_X + ENEMY_START_DISTANCE + 900f
+                + antagonistRandom.nextInt(500);
         playerX = START_X;
+        farthestX = START_X;
         playerY = GROUND_Y - PLAYER_HEIGHT;
         velocityY = 0f;
+        health = MAX_HEALTH;
+        damageRecoverySeconds = 0f;
         elapsedRunSeconds = 0d;
         terrainSpeedMultiplier = 1f;
         generateAhead(1800f);
@@ -141,6 +193,25 @@ public final class RunnerEngine {
             // Clear ground between hazards leaves time for a fresh jump.
             nextHazardX = hazard.end() + 290f + random.nextInt(125);
         }
+        if (getDistance() < 500) return;
+        while (nextAntagonistX < worldX) {
+            float x = nextAntagonistX;
+            float left = surfaceYAt(x + 2f);
+            float center = surfaceYAt(x + PLAYER_WIDTH / 2f);
+            float right = surfaceYAt(x + PLAYER_WIDTH - 2f);
+            if (!Float.isNaN(center) && !Float.isNaN(left) && !Float.isNaN(right)
+                    && Math.abs(left - center) <= 20f
+                    && Math.abs(right - center) <= 20f) {
+                antagonists.add(new Antagonist(x, center - PLAYER_HEIGHT));
+            }
+            // More than a viewport between candidates guarantees at most one visible enemy.
+            nextAntagonistX += Math.max(1400f, visibleWorldWidth + PLAYER_WIDTH + 80f)
+                    + antagonistRandom.nextInt(1200);
+        }
+    }
+
+    public void setVisibleWorldWidth(float width) {
+        if (width > 0f && !Float.isInfinite(width)) visibleWorldWidth = width;
     }
 
     public void jump() {
@@ -177,6 +248,7 @@ public final class RunnerEngine {
     /** Returns true when a collision ended this attempt. */
     private boolean advance(float dt) {
         generateAhead(playerX + 1600f);
+        damageRecoverySeconds = Math.max(0f, damageRecoverySeconds - dt);
         float oldX = playerX;
         float oldFeet = playerY + PLAYER_HEIGHT;
         float oldSurface = surfaceYForPlayer(oldX, oldFeet);
@@ -184,29 +256,29 @@ public final class RunnerEngine {
         adjustSlopeSpeed(dt, wasStanding, oldX + PLAYER_WIDTH / 2f);
         float pace = getBaseSpeed() / BASE_SPEED;
         playerX += getSpeed() * dt;
+        farthestX = Math.max(farthestX, playerX);
         playerY += velocityY * pace * dt + .5f * GRAVITY * pace * pace * dt * dt;
         velocityY += GRAVITY * pace * dt;
 
-        // Vertical depression exits still require a jump from the lower floor.
+        // Both kinds of vertical face hurt, then push the runner back for another jump.
         for (Hazard hazard : hazards) {
             if (hazard.type == HazardType.DIP && hazard.exitDegrees == 0
                     && playerX < hazard.end()
                     && playerX + PLAYER_WIDTH > hazard.end()
                     && playerY + PLAYER_HEIGHT > GROUND_Y + 1f
                     && playerY < GROUND_Y + DIP_DEPTH) {
-                playerX = hazard.end() - PLAYER_WIDTH;
+                if (hitSolid(hazard.end(), wasStanding)) return true;
                 break;
             }
         }
 
         float feet = playerY + PLAYER_HEIGHT;
-        // A vertical ledge entrance remains a damaging face below its top.
         for (Hazard hazard : hazards) {
             if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 0
                     && playerX < hazard.x && playerX + PLAYER_WIDTH > hazard.x
                     && feet > GROUND_Y - LEDGE_HEIGHT + 1f && playerY < GROUND_Y) {
-                restartAfterFailure();
-                return true;
+                if (hitSolid(hazard.x, wasStanding)) return true;
+                break;
             }
         }
 
@@ -243,8 +315,80 @@ public final class RunnerEngine {
             restartAfterFailure();
             return true;
         }
+        for (Antagonist antagonist : antagonists) {
+            if (antagonist.x > playerX + PLAYER_WIDTH) break;
+            if (playerX + PLAYER_WIDTH - 4f > antagonist.x + 4f
+                    && playerX + 4f < antagonist.x + PLAYER_WIDTH - 4f
+                    && playerY + PLAYER_HEIGHT - 5f > antagonist.y + 5f
+                    && playerY + 5f < antagonist.y + PLAYER_HEIGHT - 5f) {
+                if (hitSolid(antagonist.x, wasStanding)) return true;
+                break;
+            }
+        }
+        if (updateProjectiles(dt)) return true;
         // Waiting at a dip's lip is not counted as running time.
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
+        return false;
+    }
+
+    private boolean hitSolid(float faceX, boolean wasStanding) {
+        playerX = Math.min(playerX, faceX - PLAYER_WIDTH);
+        if (damageRecoverySeconds <= 0f) {
+            if (takeDamage()) return true;
+            playerX = Math.max(START_X, playerX - RECOIL_DISTANCE);
+        }
+        if (wasStanding) {
+            float surface = surfaceYForPlayer(playerX, playerY + PLAYER_HEIGHT);
+            if (!Float.isNaN(surface)) landAt(surface);
+        }
+        return false;
+    }
+
+    private boolean takeDamage() {
+        if (damageRecoverySeconds > 0f) return false;
+        health--;
+        if (health <= 0) {
+            restartAfterFailure();
+            return true;
+        }
+        damageRecoverySeconds = DAMAGE_RECOVERY_SECONDS;
+        return false;
+    }
+
+    private boolean updateProjectiles(float dt) {
+        for (Antagonist antagonist : antagonists) {
+            if (antagonist.x > playerX + PLAYER_WIDTH + 55f
+                    && antagonist.x < playerX + visibleWorldWidth * .75f + 80f) {
+                antagonist.shotTimer -= dt;
+                if (antagonist.shotTimer <= 0f) {
+                    float startX = antagonist.x - PROJECTILE_RADIUS - 2f;
+                    float startY = antagonist.y + PLAYER_HEIGHT / 2f;
+                    float dx = playerX + PLAYER_WIDTH / 2f - startX;
+                    float dy = playerY + PLAYER_HEIGHT / 2f - startY;
+                    float length = (float) Math.hypot(dx, dy);
+                    projectiles.add(new Projectile(startX, startY,
+                            SHOT_SPEED * dx / length, SHOT_SPEED * dy / length));
+                    antagonist.shotTimer += SHOT_INTERVAL_SECONDS;
+                }
+            }
+        }
+        for (int i = projectiles.size() - 1; i >= 0; --i) {
+            Projectile shot = projectiles.get(i);
+            shot.x += shot.vx * dt;
+            shot.y += shot.vy * dt;
+            float dx = (shot.x - playerX - PLAYER_WIDTH / 2f)
+                    / (PLAYER_WIDTH / 2f + PROJECTILE_RADIUS);
+            float dy = (shot.y - playerY - PLAYER_HEIGHT / 2f)
+                    / (PLAYER_HEIGHT / 2f + PROJECTILE_RADIUS);
+            if (dx * dx + dy * dy <= 1f) {
+                projectiles.remove(i);
+                if (takeDamage()) return true;
+                velocityY = Math.min(velocityY, SHOT_BOUNCE_VELOCITY);
+            } else if (shot.x < playerX - 200f || shot.x > playerX + visibleWorldWidth
+                    || shot.y < -50f || shot.y > WORLD_HEIGHT + 50f) {
+                projectiles.remove(i);
+            }
+        }
         return false;
     }
 
@@ -327,15 +471,46 @@ public final class RunnerEngine {
                         float vy, float remainingSeconds, double savedRunSeconds,
                         float savedTerrainMultiplier, Mode savedMode,
                         Mode savedResumeMode) {
+        restore(courseSeed, savedAttempts, x, y, vy, remainingSeconds, savedRunSeconds,
+                savedTerrainMultiplier, savedMode, savedResumeMode, MAX_HEALTH, 0f,
+                x, visibleWorldWidth, null, null);
+    }
+
+    public void restore(long courseSeed, int savedAttempts, float x, float y,
+                        float vy, float remainingSeconds, double savedRunSeconds,
+                        float savedTerrainMultiplier, Mode savedMode,
+                        Mode savedResumeMode, int savedHealth, float savedDamageRecovery,
+                        float savedFarthestX, float savedVisibleWidth,
+                        float[] savedAntagonistTimers, float[] savedProjectiles) {
+        setVisibleWorldWidth(savedVisibleWidth);
         resetCourse(courseSeed);
-        generateAhead(x + 1800f);
         attempts = Math.max(1, savedAttempts);
         playerX = x;
+        farthestX = Math.max(x, savedFarthestX);
         playerY = y;
         velocityY = vy;
+        health = Math.max(1, Math.min(MAX_HEALTH, savedHealth));
+        damageRecoverySeconds = Math.max(0f, savedDamageRecovery);
         countdownSeconds = remainingSeconds;
         elapsedRunSeconds = Math.max(0d, savedRunSeconds);
         terrainSpeedMultiplier = Math.max(.8f, Math.min(1.2f, savedTerrainMultiplier));
+        generateAhead(farthestX + Math.max(1800f, visibleWorldWidth + 550f));
+        if (savedAntagonistTimers != null) {
+            for (Antagonist antagonist : antagonists) {
+                for (int i = 0; i + 1 < savedAntagonistTimers.length; i += 2) {
+                    if (Math.abs(antagonist.x - savedAntagonistTimers[i]) < .1f) {
+                        antagonist.shotTimer = Math.max(0f, savedAntagonistTimers[i + 1]);
+                        break;
+                    }
+                }
+            }
+        }
+        if (savedProjectiles != null) {
+            for (int i = 0; i + 3 < savedProjectiles.length; i += 4) {
+                projectiles.add(new Projectile(savedProjectiles[i], savedProjectiles[i + 1],
+                        savedProjectiles[i + 2], savedProjectiles[i + 3]));
+            }
+        }
         if (savedMode == Mode.TITLE) {
             mode = Mode.TITLE;
         } else {
@@ -346,6 +521,27 @@ public final class RunnerEngine {
     }
 
     public List<Hazard> getHazards() { return hazards; }
+    public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
+    public List<Projectile> getProjectiles() { return Collections.unmodifiableList(projectiles); }
+    public float[] getAntagonistTimers() {
+        float[] state = new float[antagonists.size() * 2];
+        for (int i = 0; i < antagonists.size(); i++) {
+            state[i * 2] = antagonists.get(i).x;
+            state[i * 2 + 1] = antagonists.get(i).shotTimer;
+        }
+        return state;
+    }
+    public float[] getProjectileState() {
+        float[] state = new float[projectiles.size() * 4];
+        for (int i = 0; i < projectiles.size(); i++) {
+            Projectile shot = projectiles.get(i);
+            state[i * 4] = shot.x;
+            state[i * 4 + 1] = shot.y;
+            state[i * 4 + 2] = shot.vx;
+            state[i * 4 + 3] = shot.vy;
+        }
+        return state;
+    }
     public List<Integer> getCompletedAttemptDistances() {
         return Collections.unmodifiableList(completedAttemptDistances);
     }
@@ -365,8 +561,12 @@ public final class RunnerEngine {
     public long getSeed() { return seed; }
     public int getAttempts() { return attempts; }
     public float getPlayerX() { return playerX; }
+    public float getFarthestX() { return farthestX; }
     public float getPlayerY() { return playerY; }
     public float getVelocityY() { return velocityY; }
+    public int getHealth() { return health; }
+    public float getDamageRecoverySeconds() { return damageRecoverySeconds; }
+    public float getVisibleWorldWidth() { return visibleWorldWidth; }
     public float getCountdownSeconds() { return countdownSeconds; }
     public double getElapsedRunSeconds() { return elapsedRunSeconds; }
     public float getTerrainSpeedMultiplier() { return terrainSpeedMultiplier; }
@@ -379,5 +579,7 @@ public final class RunnerEngine {
     }
     public float getSpeedMetersPerSecond() { return getSpeed() / WORLD_UNITS_PER_METER; }
     public int getBestDistance() { return bestDistance; }
-    public int getDistance() { return Math.max(0, (int) (playerX - START_X) / 10); }
+    public int getDistance() {
+        return Math.max(0, (int) ((farthestX - START_X) / WORLD_UNITS_PER_METER));
+    }
 }
