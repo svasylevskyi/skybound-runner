@@ -9,8 +9,7 @@ import java.util.Random;
 public final class RunnerEngine {
     public static final float WORLD_HEIGHT = 540f;
     public static final float GROUND_Y = 400f;
-    public static final float LEDGE_HEIGHT = 68f;
-    public static final float DIP_DEPTH = 58f;
+    public static final float MAX_TERRAIN_HEIGHT = 100f;
     public static final float WORLD_UNITS_PER_METER = 10f;
     public static final float PLAYER_WIDTH = 32f;
     public static final float PLAYER_HEIGHT = 46f;
@@ -22,11 +21,14 @@ public final class RunnerEngine {
     private static final float ENEMY_START_DISTANCE = 500f * WORLD_UNITS_PER_METER;
     private static final float MOVING_ENEMY_START_DISTANCE = 1200f * WORLD_UNITS_PER_METER;
     private static final float ENEMY_PATROL_RANGE = 5f * WORLD_UNITS_PER_METER;
+    private static final float ENEMY_TERRAIN_CLEARANCE = 10f * WORLD_UNITS_PER_METER;
     private static final float ENEMY_PATROL_SPEED = 42f;
     private static final float BONUS_POPUP_SECONDS = .9f;
     private static final float RESPAWN_DISTANCE = 50f * WORLD_UNITS_PER_METER;
     private static final float SAFE_RESPAWN_LEAD = 110f;
     private static final float DAMAGE_RECOVERY_SECONDS = .65f;
+    private static final float DAMAGE_BLINK_SECONDS = .5f;
+    private static final float DAMAGE_BLINK_INTERVAL = .06f;
     private static final float SHOT_INTERVAL_SECONDS = 1.5f;
     private static final float SHOT_SPEED = 380f;
     private static final float SHOT_BOUNCE_VELOCITY = -200f;
@@ -35,6 +37,7 @@ public final class RunnerEngine {
     private static final float SPEED_INTERVAL_SECONDS = 3f;
     private static final float GRAVITY = 1080f;
     private static final float JUMP_VELOCITY = -490f;
+    public static final float JUMP_HEIGHT = JUMP_VELOCITY * JUMP_VELOCITY / (2f * GRAVITY);
     private static final float ENEMY_JUMP_VELOCITY =
             JUMP_VELOCITY * .4472136f; // sqrt(.2): 20% of the player's jump height.
     private static final float SLOPE_GRAVITY_RESPONSE_SECONDS = .12f;
@@ -50,18 +53,19 @@ public final class RunnerEngine {
         public final HazardType type;
         public final float x;
         public final float width;
+        public final float height;
         public final int entranceDegrees;
         public final int exitDegrees;
         public final float flatStart;
         public final float flatEnd;
 
-        private Hazard(HazardType type, float x, float flatWidth,
+        private Hazard(HazardType type, float x, float flatWidth, float height,
                        int entranceDegrees, int exitDegrees) {
             this.type = type;
             this.x = x;
+            this.height = height;
             this.entranceDegrees = entranceDegrees;
             this.exitDegrees = exitDegrees;
-            float height = type == HazardType.WALL ? LEDGE_HEIGHT : DIP_DEPTH;
             this.flatStart = x + rampRun(height, entranceDegrees);
             this.flatEnd = flatStart + flatWidth;
             this.width = flatEnd + rampRun(height, exitDegrees) - x;
@@ -71,7 +75,7 @@ public final class RunnerEngine {
 
         public float surfaceYAt(float worldX) {
             if (type == HazardType.HOLE) return Float.NaN;
-            float change = type == HazardType.WALL ? -LEDGE_HEIGHT : DIP_DEPTH;
+            float change = type == HazardType.WALL ? -height : height;
             if (worldX < flatStart && entranceDegrees != 90) {
                 return GROUND_Y + change * (worldX - x) / (flatStart - x);
             }
@@ -226,7 +230,9 @@ public final class RunnerEngine {
     }
 
     public void generateAhead(float worldX) {
-        while (nextHazardX < worldX) {
+        // Generate far enough to check the full patrol area and clearance of the last spawn.
+        while (nextHazardX < worldX + ENEMY_TERRAIN_CLEARANCE
+                + ENEMY_PATROL_RANGE + PLAYER_WIDTH) {
             HazardType type = HAZARD_TYPES[random.nextInt(HAZARD_TYPES.length)];
             float flatWidth;
             if (type == HazardType.HOLE) {
@@ -239,7 +245,8 @@ public final class RunnerEngine {
             // A finite height change needs a nonzero angle; flat ground provides 0°.
             int entrance = type == HazardType.HOLE ? 90 : 1 + random.nextInt(90);
             int exit = type == HazardType.HOLE ? 90 : 1 + random.nextInt(90);
-            Hazard hazard = new Hazard(type, nextHazardX, flatWidth, entrance, exit);
+            float height = type == HazardType.HOLE ? 0f : 40f + random.nextInt(61);
+            Hazard hazard = new Hazard(type, nextHazardX, flatWidth, height, entrance, exit);
             hazards.add(hazard);
             // Clear ground between hazards leaves time for a fresh jump.
             nextHazardX = hazard.end() + 290f + random.nextInt(125);
@@ -254,13 +261,8 @@ public final class RunnerEngine {
                     && new Random(seed ^ 0xA0761D6478BD642FL
                     ^ ((long) Float.floatToIntBits(x) * 0xE7037ED1A0B428DBL)).nextBoolean()
                     ? EnemyType.MOVING : EnemyType.STATIONARY;
-            float left = surfaceYAt(x + 2f);
             float center = surfaceYAt(x + PLAYER_WIDTH / 2f);
-            float right = surfaceYAt(x + PLAYER_WIDTH - 2f);
-            if (!wasDefeated(x) && !Float.isNaN(center)
-                    && !Float.isNaN(left) && !Float.isNaN(right)
-                    && Math.abs(left - center) <= 20f
-                    && Math.abs(right - center) <= 20f) {
+            if (!wasDefeated(x) && !Float.isNaN(center) && canSpawnAt(x, type)) {
                 Antagonist antagonist = new Antagonist(x, center - PLAYER_HEIGHT, type);
                 if (type == EnemyType.MOVING) {
                     antagonist.directionTimer = .35f + nextEnemyRandom(antagonist) * .9f;
@@ -274,6 +276,33 @@ public final class RunnerEngine {
                     visibleWorldWidth + PLAYER_WIDTH + 2f * ENEMY_PATROL_RANGE + 20f)
                     + antagonistRandom.nextInt(1200);
         }
+    }
+
+    private boolean canSpawnAt(float x, EnemyType type) {
+        float patrol = type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
+        float left = x - patrol;
+        float right = x + PLAYER_WIDTH + patrol;
+        if (!canStandAt(left) || !canStandAt(right - PLAYER_WIDTH)) return false;
+        for (Hazard hazard : hazards) {
+            if (hazard.x > right + ENEMY_TERRAIN_CLEARANCE) break;
+            if (hazard.end() < left - ENEMY_TERRAIN_CLEARANCE) continue;
+            // Keep the entire oval and its possible patrol ten metres clear of edges,
+            // vertical faces, holes, and both kinds of slope above 45 degrees.
+            if (nearTerrain(left, right, hazard.x, hazard.x)
+                    || nearTerrain(left, right, hazard.end(), hazard.end())) return false;
+            if (hazard.type == HazardType.HOLE) {
+                if (nearTerrain(left, right, hazard.x, hazard.end())) return false;
+            } else if ((hazard.entranceDegrees > 45 && nearTerrain(left, right,
+                    hazard.x, hazard.flatStart))
+                    || (hazard.exitDegrees > 45 && nearTerrain(left, right,
+                    hazard.flatEnd, hazard.end()))) return false;
+        }
+        return true;
+    }
+
+    private static boolean nearTerrain(float left, float right, float start, float end) {
+        return left < end + ENEMY_TERRAIN_CLEARANCE
+                && right > start - ENEMY_TERRAIN_CLEARANCE;
     }
 
     public void setVisibleWorldWidth(float width) {
@@ -353,13 +382,15 @@ public final class RunnerEngine {
         // A jump can land on the near edge before the runner's center reaches it.
         boolean landed = false;
         float feet = playerY + PLAYER_HEIGHT;
-        if (velocityY >= 0f && oldFeet <= GROUND_Y - LEDGE_HEIGHT + 1f
-                && feet >= GROUND_Y - LEDGE_HEIGHT) {
+        if (velocityY >= 0f) {
             for (Hazard hazard : hazards) {
-                if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 90
+                float top = GROUND_Y - hazard.height;
+                if (hazard.type == HazardType.WALL
+                        && hazard.flatStart - hazard.x < 10f
+                        && oldFeet <= top + 1f && feet >= top
                         && playerX < hazard.flatEnd
                         && playerX + PLAYER_WIDTH > hazard.x) {
-                    landAt(GROUND_Y - LEDGE_HEIGHT);
+                    landAt(top);
                     landed = true;
                     break;
                 }
@@ -384,7 +415,7 @@ public final class RunnerEngine {
                 landAt(surface);
             }
         }
-        if (playerY + PLAYER_HEIGHT > GROUND_Y + 75f) {
+        if (playerY + PLAYER_HEIGHT > GROUND_Y + MAX_TERRAIN_HEIGHT + 17f) {
             loseLife();
             return true;
         }
@@ -424,7 +455,7 @@ public final class RunnerEngine {
             if (hazard.type == HazardType.WALL
                     && hazard.flatStart - hazard.x < 10f) {
                 face = hazard.x;
-                top = GROUND_Y - LEDGE_HEIGHT;
+                top = GROUND_Y - hazard.height;
             } else if (hazard.type == HazardType.DIP
                     && hazard.end() - hazard.flatEnd < 10f) {
                 face = hazard.flatEnd;
@@ -432,11 +463,10 @@ public final class RunnerEngine {
             } else continue;
             if (oldX < face && playerX + PLAYER_WIDTH > face
                     && playerY + PLAYER_HEIGHT > top + 1f
-                    && playerY < top + (hazard.type == HazardType.WALL
-                    ? LEDGE_HEIGHT : DIP_DEPTH)) {
+                    && playerY < top + hazard.height) {
                 playerX = face - PLAYER_WIDTH;
                 if (wasStanding) stopUntilJump(hazard.type == HazardType.WALL
-                        ? GROUND_Y : GROUND_Y + DIP_DEPTH);
+                        ? GROUND_Y : GROUND_Y + hazard.height);
                 return;
             }
         }
@@ -456,7 +486,7 @@ public final class RunnerEngine {
             } else if (hazard.type == HazardType.DIP && hazard.exitDegrees < 90) {
                 start = hazard.flatEnd;
                 end = hazard.end();
-                ground = GROUND_Y + DIP_DEPTH;
+                ground = GROUND_Y + hazard.height;
             } else continue;
             boolean skippedRamp = playerX > oldX && oldCenter < end && newCenter >= end
                     && (oldCenter <= start || end - start < PLAYER_WIDTH / 2f);
@@ -579,7 +609,7 @@ public final class RunnerEngine {
     }
 
     private boolean touchesTerrain(Projectile shot) {
-        if (shot.y + PROJECTILE_RADIUS < GROUND_Y - LEDGE_HEIGHT) return false;
+        if (shot.y + PROJECTILE_RADIUS < GROUND_Y - MAX_TERRAIN_HEIGHT) return false;
         // Check the circular footprint against the same surfaces used for movement.
         // The outer samples also catch a vertical face before the dot's center crosses it.
         for (int sample = -2; sample <= 2; sample++) {
@@ -612,10 +642,10 @@ public final class RunnerEngine {
     private float surfaceYForPlayer(float left, float feet) {
         float center = left + PLAYER_WIDTH / 2f;
         for (Hazard hazard : hazards) {
-            if (hazard.type == HazardType.WALL && hazard.entranceDegrees == 90
+            if (hazard.type == HazardType.WALL && hazard.flatStart - hazard.x < 10f
                     && left < hazard.x && left + PLAYER_WIDTH > hazard.x
-                    && feet <= GROUND_Y - LEDGE_HEIGHT + 1.2f) {
-                return GROUND_Y - LEDGE_HEIGHT;
+                    && feet <= GROUND_Y - hazard.height + 1.2f) {
+                return GROUND_Y - hazard.height;
             }
             if (hazard.x > left + PLAYER_WIDTH) break;
         }
@@ -950,6 +980,11 @@ public final class RunnerEngine {
     public boolean hasCompletedFirstJump() { return firstJumpCompleted; }
     public int getHealth() { return health; }
     public float getDamageRecoverySeconds() { return damageRecoverySeconds; }
+    public boolean isDamageBlinkLight() {
+        float sinceHit = DAMAGE_RECOVERY_SECONDS - damageRecoverySeconds;
+        return sinceHit >= 0f && sinceHit < DAMAGE_BLINK_SECONDS
+                && ((int) (sinceHit / DAMAGE_BLINK_INTERVAL) & 1) == 0;
+    }
     public float getVisibleWorldWidth() { return visibleWorldWidth; }
     public float getCountdownSeconds() { return countdownSeconds; }
     public double getElapsedRunSeconds() { return elapsedRunSeconds; }

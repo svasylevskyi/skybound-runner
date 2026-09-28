@@ -20,6 +20,7 @@ public final class RunnerView extends View {
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
+    private static final int DAMAGE_BLINK_BLUE = Color.rgb(218, 245, 255);
     private static final int ENEMY_RED = Color.rgb(222, 45, 54);
     private static final int ENEMY_ORANGE = Color.rgb(242, 123, 32);
     private static final int LIFE_RED = Color.rgb(222, 45, 54);
@@ -131,7 +132,7 @@ public final class RunnerView extends View {
             paint.setColor(enemyColor(shot.type));
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
-        paint.setColor(AVATAR);
+        paint.setColor(engine.isDamageBlinkLight() ? DAMAGE_BLINK_BLUE : AVATAR);
         canvas.drawOval(engine.getPlayerX(), engine.getPlayerY(),
                 engine.getPlayerX() + RunnerEngine.PLAYER_WIDTH,
                 engine.getPlayerY() + RunnerEngine.PLAYER_HEIGHT, paint);
@@ -158,8 +159,8 @@ public final class RunnerView extends View {
 
     private void drawTerrainShape(Canvas canvas, RunnerEngine.Hazard hazard) {
         float flatY = hazard.type == RunnerEngine.HazardType.WALL
-                ? RunnerEngine.GROUND_Y - RunnerEngine.LEDGE_HEIGHT
-                : RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH;
+                ? RunnerEngine.GROUND_Y - hazard.height
+                : RunnerEngine.GROUND_Y + hazard.height;
         terrainPath.rewind();
         terrainPath.moveTo(hazard.x, RunnerEngine.GROUND_Y);
         terrainPath.lineTo(hazard.flatStart, flatY);
