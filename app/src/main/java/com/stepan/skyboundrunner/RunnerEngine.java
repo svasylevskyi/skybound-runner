@@ -16,6 +16,9 @@ public final class RunnerEngine {
     public static final int MAX_HEALTH = 10;
     public static final int MAX_LIVES = 5;
     public static final float PROJECTILE_RADIUS = 6f;
+    // Muzzle position relative to the enemy's 32 x 46 collision bounds.
+    public static final float MUZZLE_X = -2f;
+    public static final float MUZZLE_Y = PLAYER_HEIGHT / 2f;
 
     private static final float START_X = 140f;
     private static final float ENEMY_START_DISTANCE = 500f * WORLD_UNITS_PER_METER;
@@ -123,6 +126,8 @@ public final class RunnerEngine {
             this.x = x;
             this.y = y;
         }
+
+        public boolean isJumping() { return jumpOffset < -1f; }
     }
 
     public static final class Projectile {
@@ -576,8 +581,8 @@ public final class RunnerEngine {
                     && antagonist.x < playerX + visibleWorldWidth * .75f + 80f) {
                 antagonist.shotTimer -= dt;
                 if (antagonist.shotTimer <= 0f) {
-                    float startX = antagonist.x - PROJECTILE_RADIUS - 2f;
-                    float startY = antagonist.y + PLAYER_HEIGHT / 2f;
+                    float startX = antagonist.x + MUZZLE_X - PROJECTILE_RADIUS;
+                    float startY = antagonist.y + MUZZLE_Y;
                     projectiles.add(new Projectile(startX, startY,
                             -SHOT_SPEED, 0f, antagonist.type));
                     antagonist.shotTimer += SHOT_INTERVAL_SECONDS;

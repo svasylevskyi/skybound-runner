@@ -22,7 +22,9 @@ public final class RunnerView extends View {
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int DAMAGE_BLINK_BLUE = Color.rgb(218, 245, 255);
     private static final int ENEMY_RED = Color.rgb(222, 45, 54);
+    private static final int ENEMY_RED_WEAPON = Color.rgb(162, 34, 45);
     private static final int ENEMY_ORANGE = Color.rgb(242, 123, 32);
+    private static final int ENEMY_ORANGE_DETAIL = Color.rgb(187, 83, 19);
     private static final int LIFE_RED = Color.rgb(222, 45, 54);
     private static final int LIFE_GRAY = Color.rgb(146, 151, 159);
     private static final int EMPTY_HEALTH = Color.argb(128, 218, 223, 227);
@@ -32,6 +34,7 @@ public final class RunnerView extends View {
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path terrainPath = new Path();
     private final Path heartPath = new Path();
+    private final Path turretPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
@@ -123,19 +126,113 @@ public final class RunnerView extends View {
         for (RunnerEngine.Antagonist antagonist : engine.getAntagonists()) {
             if (antagonist.x + RunnerEngine.PLAYER_WIDTH < cameraX) continue;
             if (antagonist.x > right) break;
-            paint.setColor(enemyColor(antagonist.type));
-            canvas.drawOval(antagonist.x, antagonist.y,
-                    antagonist.x + RunnerEngine.PLAYER_WIDTH,
-                    antagonist.y + RunnerEngine.PLAYER_HEIGHT, paint);
+            if (antagonist.type == RunnerEngine.EnemyType.STATIONARY) {
+                drawTurret(canvas, antagonist.x, antagonist.y);
+            } else {
+                float stride = (float) Math.sin(antagonist.x * .13f);
+                drawStickFigure(canvas, antagonist.x, antagonist.y,
+                        ENEMY_RED, false, stride, antagonist.isJumping(), true);
+            }
         }
         for (RunnerEngine.Projectile shot : engine.getProjectiles()) {
             paint.setColor(enemyColor(shot.type));
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
-        paint.setColor(engine.isDamageBlinkLight() ? DAMAGE_BLINK_BLUE : AVATAR);
-        canvas.drawOval(engine.getPlayerX(), engine.getPlayerY(),
-                engine.getPlayerX() + RunnerEngine.PLAYER_WIDTH,
-                engine.getPlayerY() + RunnerEngine.PLAYER_HEIGHT, paint);
+        float stride = Math.abs(engine.getSpeed()) > 1f
+                ? (float) Math.sin(engine.getPlayerX() * .055f) : 0f;
+        drawStickFigure(canvas, engine.getPlayerX(), engine.getPlayerY(),
+                AVATAR, engine.isDamageBlinkLight(), stride,
+                Math.abs(engine.getVelocityY()) > 1f, false);
+        canvas.restore();
+    }
+
+    private void drawStickFigure(Canvas canvas, float x, float y, int color,
+                                 boolean blinkHead, float stride, boolean jumping,
+                                 boolean holdingGun) {
+        canvas.save();
+        canvas.translate(x, y);
+        float swing = jumping ? 0f : stride * 6.5f;
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setStrokeWidth(3.6f);
+        paint.setColor(color);
+
+        // Two bent legs stay inside the existing collision bounds.
+        if (jumping) {
+            canvas.drawLine(16f, 28f, 10f, 35f, paint);
+            canvas.drawLine(10f, 35f, 5f, 42f, paint);
+            canvas.drawLine(16f, 28f, 23f, 33f, paint);
+            canvas.drawLine(23f, 33f, 28f, 42f, paint);
+        } else {
+            canvas.drawLine(16f, 28f, 12f + swing * .45f, 36f, paint);
+            canvas.drawLine(12f + swing * .45f, 36f,
+                    8f + swing, 44f - Math.max(0f, swing) * .25f, paint);
+            canvas.drawLine(16f, 28f, 20f - swing * .45f, 36f, paint);
+            canvas.drawLine(20f - swing * .45f, 36f,
+                    24f - swing, 44f - Math.max(0f, -swing) * .25f, paint);
+        }
+        canvas.drawLine(16f, 14f, 16f, 28f, paint);
+
+        if (holdingGun) {
+            canvas.drawLine(16f, 18f, 10f, 20f, paint);
+            canvas.drawLine(10f, 20f, 7f, RunnerEngine.MUZZLE_Y, paint);
+            canvas.drawLine(16f, 18f, 23f, 22f, paint);
+            canvas.drawLine(23f, 22f, 25f, 27f - swing * .25f, paint);
+            paint.setColor(ENEMY_RED_WEAPON);
+            paint.setStrokeCap(Paint.Cap.BUTT);
+            canvas.drawLine(RunnerEngine.MUZZLE_X, RunnerEngine.MUZZLE_Y,
+                    11f, RunnerEngine.MUZZLE_Y, paint);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawRoundRect(7f, 20f, 14f, 26f, 1.5f, 1.5f, paint);
+            canvas.drawRect(8f, 25f, 10.5f, 29f, paint);
+        } else if (jumping) {
+            canvas.drawLine(16f, 18f, 8f, 17f, paint);
+            canvas.drawLine(8f, 17f, 5f, 21f, paint);
+            canvas.drawLine(16f, 18f, 24f, 17f, paint);
+            canvas.drawLine(24f, 17f, 27f, 21f, paint);
+        } else {
+            canvas.drawLine(16f, 18f, 10f - swing * .3f, 21f, paint);
+            canvas.drawLine(10f - swing * .3f, 21f, 8f - swing, 26f, paint);
+            canvas.drawLine(16f, 18f, 22f + swing * .3f, 21f, paint);
+            canvas.drawLine(22f + swing * .3f, 21f, 24f + swing, 26f, paint);
+        }
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(blinkHead ? DAMAGE_BLINK_BLUE : color);
+        canvas.drawCircle(16f, 7.5f, 5.5f, paint);
+        if (blinkHead) {
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(1.5f);
+            canvas.drawCircle(16f, 7.5f, 5.5f, paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
+        paint.setStrokeCap(Paint.Cap.BUTT);
+        canvas.restore();
+    }
+
+    private void drawTurret(Canvas canvas, float x, float y) {
+        canvas.save();
+        canvas.translate(x, y);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(ENEMY_ORANGE);
+        // The barrel tip is exactly where the projectile's near edge starts.
+        canvas.drawRoundRect(RunnerEngine.MUZZLE_X, RunnerEngine.MUZZLE_Y - 3f,
+                17f, RunnerEngine.MUZZLE_Y + 3f, 2f, 2f, paint);
+        turretPath.rewind();
+        turretPath.moveTo(5f, 29f);
+        turretPath.lineTo(8f, 12f);
+        turretPath.quadTo(15f, 3f, 23f, 7f);
+        turretPath.lineTo(29f, 15f);
+        turretPath.lineTo(29f, 30f);
+        turretPath.close();
+        canvas.drawPath(turretPath, paint);
+        canvas.drawRoundRect(4f, 28f, 29f, 41f, 3f, 3f, paint);
+        canvas.drawRoundRect(1f, 38f, 31f, 45f, 3f, 3f, paint);
+        paint.setColor(ENEMY_ORANGE_DETAIL);
+        canvas.drawCircle(21f, 16f, 2.5f, paint);
+        canvas.drawRoundRect(5f, 40f, 27f, 43f, 1f, 1f, paint);
         canvas.restore();
     }
 

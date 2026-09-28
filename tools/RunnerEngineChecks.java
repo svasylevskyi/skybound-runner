@@ -818,9 +818,9 @@ public final class RunnerEngineChecks {
         check(!game.getProjectiles().isEmpty(), "moving enemy shoots while jumping");
         RunnerEngine.Projectile shot = game.getProjectiles().get(0);
         check(shot.type == RunnerEngine.EnemyType.MOVING
-                        && Math.abs(shot.getY() - foe.y - RunnerEngine.PLAYER_HEIGHT / 2f) < .1f
                         && shot.getY() < RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT / 2f,
                 "red projectile launches horizontally at the airborne enemy's height");
+        checkShotAtMuzzle(shot, foe);
 
         RunnerEngine restored = new RunnerEngine();
         restored.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
@@ -1223,6 +1223,10 @@ public final class RunnerEngineChecks {
                 "visible stationary enemy fires a moving orange dot towards the runner");
         check(shooter.getProjectiles().get(0).type == RunnerEngine.EnemyType.STATIONARY,
                 "stationary enemy projectile keeps its orange type");
+        final float firingTurretX = enemyX;
+        RunnerEngine.Antagonist firingTurret = shooter.getAntagonists().stream()
+                .filter(e -> e.x == firingTurretX).findFirst().get();
+        checkShotAtMuzzle(shooter.getProjectiles().get(0), firingTurret);
         float[] shots = shooter.getProjectileState();
         check(shots[2] < 0f && shots[3] == 0f,
                 "projectile travels left with no vertical velocity");
@@ -1268,6 +1272,15 @@ public final class RunnerEngineChecks {
         }
         check(hitY - highestY > 10f && hitY - highestY < 30f,
                 "projectile bounce rises much less than a controlled jump");
+    }
+
+    private static void checkShotAtMuzzle(RunnerEngine.Projectile shot,
+                                          RunnerEngine.Antagonist enemy) {
+        float muzzleX = enemy.x + RunnerEngine.MUZZLE_X;
+        float shotRight = shot.getX() + RunnerEngine.PROJECTILE_RADIUS;
+        check(muzzleX - shotRight > 0f && muzzleX - shotRight < 4f
+                        && Math.abs(shot.getY() - enemy.y - RunnerEngine.MUZZLE_Y) < .1f,
+                "projectile emerges from the weapon muzzle at the enemy's current height");
     }
 
     private static RunnerEngine withProjectile(long seed, float x, float y) {
