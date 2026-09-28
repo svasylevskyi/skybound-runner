@@ -52,18 +52,24 @@ public final class RunnerEngineChecks {
         boolean sawModerate = false;
         boolean sawSteep = false;
         boolean sawVertical = false;
+        boolean sawHeightVariety = false;
+        float previousHeight = -1f;
         for (long seed = 0; seed < 100; ++seed) {
             RunnerEngine game = started(seed);
             game.generateAhead(50_000f);
             float previousEnd = -1000f;
             for (RunnerEngine.Hazard hazard : game.getHazards()) {
                 check(hazard.x - previousEnd >= 289f, "hazards have recovery room");
-                check(hazard.width <= 8000f, "shallow ramps remain finite");
+                check(hazard.width <= 12000f, "shallow ramps remain finite");
                 check(hazard.x <= hazard.flatStart && hazard.flatStart < hazard.flatEnd
                         && hazard.flatEnd <= hazard.end(), "ramp and flat sections are ordered");
                 if (hazard.type != RunnerEngine.HazardType.HOLE) {
-                    float height = hazard.type == RunnerEngine.HazardType.WALL
-                            ? RunnerEngine.LEDGE_HEIGHT : RunnerEngine.DIP_DEPTH;
+                    float height = hazard.height;
+                    check(height >= 40f && height <= RunnerEngine.MAX_TERRAIN_HEIGHT
+                                    && height < RunnerEngine.JUMP_HEIGHT,
+                            "every elevation and depression is lower than a regular jump");
+                    sawHeightVariety |= previousHeight >= 0f && previousHeight != height;
+                    previousHeight = height;
                     check(hazard.entranceDegrees >= 1 && hazard.entranceDegrees <= 90
                                     && hazard.exitDegrees >= 1 && hazard.exitDegrees <= 90,
                             "height-changing edges range from 1 to 90 degrees");
@@ -73,6 +79,10 @@ public final class RunnerEngineChecks {
                     check(Math.abs(hazard.end() - hazard.flatEnd -
                             horizontalRun(height, hazard.exitDegrees)) < .12f,
                             "exit has its stated incline");
+                    float top = hazard.type == RunnerEngine.HazardType.WALL
+                            ? RunnerEngine.GROUND_Y - height : RunnerEngine.GROUND_Y + height;
+                    check(Math.abs(hazard.surfaceYAt((hazard.flatStart + hazard.flatEnd) / 2f)
+                            - top) < .01f, "flat section uses its generated height");
                     sawGentle |= hazard.entranceDegrees <= 10 || hazard.exitDegrees <= 10;
                     sawModerate |= hazard.entranceDegrees >= 25 && hazard.entranceDegrees <= 55;
                     sawSteep |= hazard.entranceDegrees >= 70 && hazard.entranceDegrees < 90;
@@ -81,8 +91,8 @@ public final class RunnerEngineChecks {
                 previousEnd = hazard.end();
             }
         }
-        check(sawGentle && sawModerate && sawSteep && sawVertical,
-                "generation includes gentle, moderate, steep and vertical edges");
+        check(sawGentle && sawModerate && sawSteep && sawVertical && sawHeightVariety,
+                "generation includes varied heights, gentle, moderate, steep and vertical edges");
     }
 
     private static float horizontalRun(float height, int degrees) {
@@ -98,6 +108,8 @@ public final class RunnerEngineChecks {
             long seed = trial * 0x9E3779B97F4A7C15L;
             RunnerEngine game = started(seed);
             RunnerEngine.Hazard first = game.getHazards().get(0);
+            // Exceptionally shallow ramps can extend past the 500 m enemy unlock.
+            if (first.end() > 5900f) continue;
             sawHole |= first.type == RunnerEngine.HazardType.HOLE;
             sawWall |= first.type == RunnerEngine.HazardType.WALL;
             sawDip |= first.type == RunnerEngine.HazardType.DIP;
@@ -114,7 +126,7 @@ public final class RunnerEngineChecks {
                         && !jumped && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= first.end() - 120f
                         && game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
-                        >= RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH - 1f) {
+                        >= RunnerEngine.GROUND_Y + first.height - 1f) {
                     game.jump();
                     jumped = true;
                 }
@@ -126,7 +138,9 @@ public final class RunnerEngineChecks {
                         + beforeY + ", wall=" + first.x + ".." + first.end() + ")");
                 if (first.type != RunnerEngine.HazardType.DIP) {
                     check(game.getHealth() == RunnerEngine.MAX_HEALTH,
-                            "timed jump avoids damage on a ledge or hole: seed=" + seed);
+                            "timed jump avoids damage on a ledge or hole: seed=" + seed
+                                    + ", type=" + first.type + ", end=" + first.end()
+                                    + ", player=" + game.getPlayerX());
                 }
             }
             if (first.type != RunnerEngine.HazardType.DIP || first.exitDegrees == 90) {
@@ -167,6 +181,61 @@ public final class RunnerEngineChecks {
                     && first.entranceDegrees <= maxAngle) return seed;
         }
         throw new AssertionError("no wall between " + minAngle + " and " + maxAngle + " degrees");
+    }
+
+    private static long seedForTall(RunnerEngine.HazardType type, int minEntranceAngle) {
+        for (long trial = 0; trial < 10_000; ++trial) {
+            long seed = trial * 0x9E3779B97F4A7C15L;
+            RunnerEngine game = new RunnerEngine();
+            game.startNewGame(seed);
+            RunnerEngine.Hazard first = game.getHazards().get(0);
+            if (first.type == type && first.height >= 98f
+                    && first.entranceDegrees >= minEntranceAngle) return seed;
+        }
+        throw new AssertionError("no tall " + type + " generated");
+    }
+
+    private static void testTallTerrainIsPlayable() {
+        RunnerEngine wallRun = started(seedForTall(RunnerEngine.HazardType.WALL, 85));
+        RunnerEngine.Hazard wall = wallRun.getHazards().get(0);
+        for (int i = 0; i < 600 && !wallRun.isWaitingForJump(); i++) {
+            wallRun.update(1f / 120f);
+        }
+        check(wallRun.isWaitingForJump() && wallRun.getLives() == RunnerEngine.MAX_LIVES,
+                "almost maximum-height ledge stops the runner without a lost life");
+        wallRun.jump();
+        for (int i = 0; i < 160 && wallRun.getPlayerX() <= wall.flatStart + 10f; i++) {
+            wallRun.update(1f / 120f);
+        }
+        check(wallRun.getPlayerX() > wall.flatStart + 10f
+                        && wallRun.getLives() == RunnerEngine.MAX_LIVES,
+                "normal jump clears an almost maximum-height ledge");
+
+        RunnerEngine dipRun = started(seedForTall(RunnerEngine.HazardType.DIP, 45));
+        RunnerEngine.Hazard dip = dipRun.getHazards().get(0);
+        dipRun.restore(dipRun.getSeed(), RunnerEngine.MAX_LIVES,
+                dip.flatStart + 20f, RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 0d, 0f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        dipRun.continueGame();
+        boolean landed = false;
+        for (int i = 0; i < 160 && !landed; i++) {
+            dipRun.update(1f / 120f);
+            landed = dipRun.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                    >= RunnerEngine.GROUND_Y + dip.height - 1f;
+        }
+        check(landed && dipRun.getLives() == RunnerEngine.MAX_LIVES
+                        && dipRun.getMode() == RunnerEngine.Mode.RUNNING,
+                "deep depression floor is safe even below the old hole threshold");
+        dipRun.jump();
+        float highestFeet = Float.POSITIVE_INFINITY;
+        for (int i = 0; i < 75; i++) {
+            dipRun.update(1f / 120f);
+            highestFeet = Math.min(highestFeet,
+                    dipRun.getPlayerY() + RunnerEngine.PLAYER_HEIGHT);
+        }
+        check(highestFeet < RunnerEngine.GROUND_Y
+                        && dipRun.getLives() == RunnerEngine.MAX_LIVES,
+                "normal jump reaches above the lip of a deep depression");
     }
 
     private static long seedForSlopes(RunnerEngine.HazardType type,
@@ -530,7 +599,8 @@ public final class RunnerEngineChecks {
         RunnerEngine.Hazard lowerHole = lowerScore.getHazards().get(0);
         lowerScore.restore(lowerScore.getSeed(), 1,
                 lowerHole.x + lowerHole.width / 2f,
-                RunnerEngine.GROUND_Y + 75f - RunnerEngine.PLAYER_HEIGHT,
+                RunnerEngine.GROUND_Y + RunnerEngine.MAX_TERRAIN_HEIGHT + 17f
+                        - RunnerEngine.PLAYER_HEIGHT,
                 0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
         lowerScore.continueGame();
         lowerScore.update(1f / 120f);
@@ -891,6 +961,92 @@ public final class RunnerEngineChecks {
                 "bonus meters do not unlock enemies before 500 physical metres");
     }
 
+    private static boolean withinTenMetres(float left, float right, float start, float end) {
+        float clearance = 10f * RunnerEngine.WORLD_UNITS_PER_METER;
+        return left < end + clearance && right > start - clearance;
+    }
+
+    private static void testEnemyTerrainClearance() {
+        int checkedStationary = 0;
+        int checkedMoving = 0;
+        for (long seed = 0; seed < 30; seed++) {
+            RunnerEngine game = new RunnerEngine();
+            game.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.generateAhead(80_000f);
+            for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
+                float patrol = foe.type == RunnerEngine.EnemyType.MOVING
+                        ? 5f * RunnerEngine.WORLD_UNITS_PER_METER : 0f;
+                if (patrol > 0f) checkedMoving++;
+                else checkedStationary++;
+                float left = foe.spawnX - patrol;
+                float right = foe.spawnX + RunnerEngine.PLAYER_WIDTH + patrol;
+                for (RunnerEngine.Hazard hazard : game.getHazards()) {
+                    check(!withinTenMetres(left, right, hazard.x, hazard.x)
+                                    && !withinTenMetres(left, right, hazard.end(), hazard.end()),
+                            "enemy and full patrol stay ten metres from terrain edges");
+                    if (hazard.type == RunnerEngine.HazardType.HOLE) {
+                        check(!withinTenMetres(left, right, hazard.x, hazard.end()),
+                                "enemy and full patrol stay clear of holes");
+                    } else {
+                        if (hazard.entranceDegrees > 45) {
+                            check(!withinTenMetres(left, right, hazard.x, hazard.flatStart),
+                                    "enemy stays clear of a steep entrance or vertical wall");
+                        }
+                        if (hazard.exitDegrees > 45) {
+                            check(!withinTenMetres(left, right, hazard.flatEnd, hazard.end()),
+                                    "enemy stays clear of a steep exit or vertical wall");
+                        }
+                    }
+                }
+            }
+        }
+        check(checkedStationary > 10 && checkedMoving > 10,
+                "both enemy types spawn despite terrain clearance constraints");
+    }
+
+    private static void testDamageBlink() {
+        RunnerEngine game = withProjectile(123L, 140f + RunnerEngine.PLAYER_WIDTH / 2f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT / 2f);
+        check(!game.isDamageBlinkLight(), "runner begins in its normal color");
+        game.update(1f / 120f);
+        check(game.getHealth() == RunnerEngine.MAX_HEALTH - 1
+                        && game.isDamageBlinkLight(),
+                "projectile damage starts a light blue blink");
+        for (int i = 0; i < 8; i++) game.update(1f / 120f);
+        check(!game.isDamageBlinkLight(), "blink alternates with the original color");
+        game.pause();
+        float savedRecovery = game.getDamageRecoverySeconds();
+        game.update(1f);
+        check(game.getDamageRecoverySeconds() == savedRecovery,
+                "pause freezes the blink phase");
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
+                game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                game.getMode(), game.getResumeMode(), game.getHealth(),
+                savedRecovery, game.getFarthestX(), game.getVisibleWorldWidth(),
+                game.getAntagonistTimers(), game.getProjectileState());
+        check(restored.isDamageBlinkLight() == game.isDamageBlinkLight(),
+                "activity recreation retains the blink phase");
+        restored.continueGame();
+        boolean sawLight = false;
+        boolean sawNormal = false;
+        for (int i = 0; i < 65; i++) {
+            restored.update(1f / 120f);
+            sawLight |= restored.isDamageBlinkLight();
+            sawNormal |= !restored.isDamageBlinkLight();
+        }
+        check(sawLight && sawNormal && !restored.isDamageBlinkLight()
+                        && restored.getDamageRecoverySeconds() > 0f,
+                "blink alternates rapidly for half a second then returns to normal");
+        for (int i = 0; i < 10; i++) restored.update(1f / 120f);
+        check(restored.getDamageRecoverySeconds() == 0f
+                        && !restored.isDamageBlinkLight(),
+                "the existing damage recovery finishes without restarting the blink");
+    }
+
     private static void testEnemyStomp() {
         RunnerEngine stomp = enemyOnOpenGround(180f);
         RunnerEngine.Antagonist foe = stomp.getAntagonists().stream()
@@ -1046,9 +1202,20 @@ public final class RunnerEngineChecks {
         check(finalLife.getBonusMeters() == 0 && finalLife.getDistance() == 0,
                 "new run resets bonus metres");
 
-        RunnerEngine shooter = enemyOnOpenGround(330f);
+        RunnerEngine shooter = enemyOnOpenGround(260f);
         enemyX = shooter.getAntagonists().stream()
                 .filter(e -> e.x > shooter.getPlayerX()).findFirst().get().x;
+        float[] earlyShotTimers = shooter.getAntagonistTimers();
+        for (int i = 0; i < earlyShotTimers.length; i += 2) {
+            if (earlyShotTimers[i] == enemyX) earlyShotTimers[i + 1] = .2f;
+        }
+        shooter.restore(shooter.getSeed(), shooter.getLives(), shooter.getPlayerX(),
+                shooter.getPlayerY(), shooter.getVelocityY(), shooter.getCountdownSeconds(),
+                shooter.getElapsedRunSeconds(), shooter.getTerrainSpeedMultiplier(),
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING, shooter.getHealth(),
+                shooter.getDamageRecoverySeconds(), shooter.getFarthestX(),
+                shooter.getVisibleWorldWidth(), earlyShotTimers, null);
+        shooter.continueGame();
         for (int step = 0; step < 120 && shooter.getProjectiles().isEmpty(); step++) {
             shooter.update(1f / 120f);
         }
@@ -1145,7 +1312,7 @@ public final class RunnerEngineChecks {
                 RunnerEngine.GROUND_Y - 3f), "flat ground");
 
         RunnerEngine highShot = withProjectile(verticalSeed, verticalEdge + 25f,
-                RunnerEngine.GROUND_Y - RunnerEngine.LEDGE_HEIGHT - 25f);
+                RunnerEngine.GROUND_Y - RunnerEngine.MAX_TERRAIN_HEIGHT - 25f);
         float startingY = highShot.getProjectiles().get(0).getY();
         for (int step = 0; step < 60; step++) highShot.update(1f / 120f);
         check(highShot.getProjectiles().size() == 1
@@ -1177,7 +1344,7 @@ public final class RunnerEngineChecks {
                         && !jumped && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= hazard.end() - 120f
                         && game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
-                        >= RunnerEngine.GROUND_Y + RunnerEngine.DIP_DEPTH - 1f) {
+                        >= RunnerEngine.GROUND_Y + hazard.height - 1f) {
                     game.jump();
                     jumped = true;
                 }
@@ -1200,6 +1367,7 @@ public final class RunnerEngineChecks {
         testLayout();
         testFirstJumpHint();
         testSlopes();
+        testTallTerrainIsPlayable();
         testSteepSlopeSlideAndJump();
         testFirstHazards();
         testDepression();
@@ -1209,6 +1377,8 @@ public final class RunnerEngineChecks {
         testSpeedAndManualPause();
         testWallStopAndJump();
         testAntagonistGeneration();
+        testEnemyTerrainClearance();
+        testDamageBlink();
         testMovingEnemyGenerationAndBehavior();
         testEnemyStomp();
         testMovingEnemyCollisions();
