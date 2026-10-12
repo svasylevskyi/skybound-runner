@@ -6,6 +6,12 @@ public final class RunnerEngineChecks {
         if (!good) throw new AssertionError(message);
     }
 
+    private static void completeLifeLoss(RunnerEngine game) {
+        check(game.getMode() == RunnerEngine.Mode.LIFE_LOSS,
+                "lost life holds the character at its final position");
+        game.update(game.getLifeLossRemainingSeconds() + .01f);
+    }
+
     private static RunnerEngine started(long seed) {
         RunnerEngine game = new RunnerEngine();
         game.startNewGame(seed);
@@ -731,6 +737,22 @@ public final class RunnerEngineChecks {
         RunnerEngine.Hazard hole = holeRun.getHazards().get(0);
         for (int step = 0; step < 1000 && holeRun.getLives() == RunnerEngine.MAX_LIVES;
                 ++step) holeRun.update(1f / 120f);
+        float finalX = holeRun.getPlayerX();
+        float finalY = holeRun.getPlayerY();
+        check(holeRun.getMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && holeRun.isInWater()
+                        && holeRun.isLifeLossBlinkVisible()
+                        && Math.abs(holeRun.getLifeLossRemainingSeconds() - .5f) < .001f,
+                "drowning freezes the rider at the bottom before respawning");
+        holeRun.update(.07f);
+        check(!holeRun.isLifeLossBlinkVisible() && holeRun.getPlayerX() == finalX
+                        && holeRun.getPlayerY() == finalY,
+                "rider briefly disappears while its final position stays fixed");
+        holeRun.update(.07f);
+        check(holeRun.isLifeLossBlinkVisible() && holeRun.getPlayerX() == finalX
+                        && holeRun.getPlayerY() == finalY,
+                "rider blinks back on during the half-second delay");
+        completeLifeLoss(holeRun);
         check(holeRun.getLives() == RunnerEngine.MAX_LIVES - 1
                         && holeRun.getMode() == RunnerEngine.Mode.COUNTDOWN
                         && holeRun.getFarthestX() >= hole.x
@@ -749,6 +771,7 @@ public final class RunnerEngineChecks {
                 new float[]{196f, RunnerEngine.GROUND_Y - 23f, -380f, 0f});
         projectileRun.continueGame();
         projectileRun.update(1f / 120f);
+        completeLifeLoss(projectileRun);
         check(projectileRun.getLives() == RunnerEngine.MAX_LIVES - 1
                         && projectileRun.getMode() == RunnerEngine.Mode.COUNTDOWN
                         && projectileRun.getPlayerX() == 140f
@@ -774,6 +797,7 @@ public final class RunnerEngineChecks {
                     new float[]{collisionX + 16f, RunnerEngine.GROUND_Y - 23f, -380f, 0f});
             game.continueGame();
             game.update(1f / 120f);
+            completeLifeLoss(game);
             check(game.getLives() == RunnerEngine.MAX_LIVES - 1
                             && game.getMode() == RunnerEngine.Mode.COUNTDOWN
                             && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH + 110f
@@ -791,6 +815,61 @@ public final class RunnerEngineChecks {
         throw new AssertionError("no course with open ground 50 metres after a hole");
     }
 
+    private static void testLifeLossPauseAndRestore() {
+        RunnerEngine game = new RunnerEngine();
+        game.restore(7L, RunnerEngine.MAX_LIVES, 180f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                1, 0f, 180f, 960f, null,
+                new float[]{196f, RunnerEngine.GROUND_Y - 23f, -380f, 0f});
+        game.continueGame();
+        game.update(1f / 120f);
+        check(game.getMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && game.getLives() == RunnerEngine.MAX_LIVES - 1,
+                "the final health point begins a half-second death blink");
+        float x = game.getPlayerX();
+        float y = game.getPlayerY();
+        game.update(.19f);
+        float remaining = game.getLifeLossRemainingSeconds();
+        game.pauseForBackground();
+        game.update(10f);
+        check(game.getMode() == RunnerEngine.Mode.PAUSED
+                        && game.getResumeMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && game.getLifeLossRemainingSeconds() == remaining
+                        && game.getPlayerX() == x && game.getPlayerY() == y,
+                "backgrounding freezes the death blink at its final position");
+
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(game.getSeed(), game.getLives(), game.getPlayerX(),
+                game.getPlayerY(), game.getVelocityY(), game.getCountdownSeconds(),
+                game.getElapsedRunSeconds(), game.getTerrainSpeedMultiplier(),
+                game.getMode(), game.getResumeMode(), game.getHealth(),
+                game.getDamageRecoverySeconds(), game.getFarthestX(),
+                game.getVisibleWorldWidth(), game.getAntagonistTimers(),
+                game.getProjectileState(), game.getDefeatedAntagonists());
+        restored.restoreLifeLossRemainingSeconds(remaining);
+        check(restored.getMode() == RunnerEngine.Mode.PAUSED
+                        && restored.getResumeMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && restored.getLifeLossRemainingSeconds() == remaining
+                        && restored.isLifeLossBlinkVisible() == game.isLifeLossBlinkVisible(),
+                "activity restoration preserves the remaining blink phase");
+        game.continueGame();
+        restored.continueGame();
+        game.update(.15f);
+        restored.update(.15f);
+        check(game.getMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && restored.getMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && restored.getPlayerX() == x && restored.getPlayerY() == y,
+                "Continue finishes the blink before moving the rider");
+        completeLifeLoss(game);
+        completeLifeLoss(restored);
+        check(restored.getMode() == RunnerEngine.Mode.COUNTDOWN
+                        && restored.getPlayerX() == game.getPlayerX()
+                        && restored.getPlayerY() == game.getPlayerY()
+                        && restored.getHealth() == RunnerEngine.MAX_HEALTH,
+                "restored loss respawns identically and begins the normal countdown");
+    }
+
     private static void testFailureAndPause() {
         RunnerEngine game = started(seedFor(RunnerEngine.HazardType.HOLE));
         RunnerEngine.Hazard hole = game.getHazards().get(0);
@@ -798,6 +877,7 @@ public final class RunnerEngineChecks {
         for (int i = 0; i < 600 && game.getLives() == RunnerEngine.MAX_LIVES; ++i) {
             game.update(1f / 60f);
         }
+        completeLifeLoss(game);
         check(game.getLives() == RunnerEngine.MAX_LIVES - 1
                         && game.getHealth() == RunnerEngine.MAX_HEALTH
                         && game.getMode() == RunnerEngine.Mode.COUNTDOWN,
@@ -846,6 +926,7 @@ public final class RunnerEngineChecks {
                     ++step) game.update(1f / 120f);
             check(game.getLives() == before - 1,
                     "each unavoided hole costs exactly one life");
+            completeLifeLoss(game);
             if (game.getLives() > 0) {
                 check(game.getMode() == RunnerEngine.Mode.COUNTDOWN
                                 && game.getBestDistance() == 25,
@@ -906,6 +987,7 @@ public final class RunnerEngineChecks {
         for (int step = 0; step < 800 && lowerScore.getLives() > 0; step++) {
             lowerScore.update(1f / 120f);
         }
+        completeLifeLoss(lowerScore);
         check(lowerScore.getMode() == RunnerEngine.Mode.GAME_OVER
                         && lowerScore.getLives() == 0
                         && lowerScore.getDistance() < 999
@@ -1512,6 +1594,7 @@ public final class RunnerEngineChecks {
                 2, .3f, closeX, 960f, null, null);
         lastHealth.continueGame();
         lastHealth.update(1f / 120f);
+        completeLifeLoss(lastHealth);
         check(lastHealth.getLives() == RunnerEngine.MAX_LIVES - 1
                         && lastHealth.getMode() == RunnerEngine.Mode.COUNTDOWN
                         && lastHealth.getHealth() == RunnerEngine.MAX_HEALTH
@@ -1528,6 +1611,11 @@ public final class RunnerEngineChecks {
                 2, 0f, finalContactX, 960f, null, null);
         finalLife.continueGame();
         finalLife.update(1f / 120f);
+        check(finalLife.getMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && finalLife.getLives() == 0
+                        && finalLife.getBestScore() == finalLife.getScore(),
+                "last life also blinks at the final collision before game over");
+        completeLifeLoss(finalLife);
         check(finalLife.getMode() == RunnerEngine.Mode.GAME_OVER
                         && finalLife.getBonusPoints() == 100
                         && finalLife.getBestDistance() == finalLife.getDistance()
@@ -2223,9 +2311,27 @@ public final class RunnerEngineChecks {
         }
         check(lastBottom >= RunnerEngine.WORLD_HEIGHT - entrySpeed / 120f
                         && drown.getLives() == RunnerEngine.MAX_LIVES - 1
-                        && drown.getMode() == RunnerEngine.Mode.COUNTDOWN
-                        && !drown.isInWater(),
-                "reaching the screen bottom costs a life and resets the water state");
+                        && drown.getMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && drown.isInWater(),
+                "reaching the screen bottom costs a life while the rider blinks underwater");
+        drown.pauseForBackground();
+        RunnerEngine restoredDrown = new RunnerEngine();
+        restoredDrown.restore(waterSeed, drown.getLives(), drown.getPlayerX(),
+                drown.getPlayerY(), drown.getVelocityY(), 0f,
+                drown.getElapsedRunSeconds(), drown.getTerrainSpeedMultiplier(),
+                drown.getMode(), drown.getResumeMode());
+        restoredDrown.restoreLifeLossRemainingSeconds(drown.getLifeLossRemainingSeconds());
+        restoredDrown.restoreWaterState(drown.getWaterState());
+        check(restoredDrown.isInWater() && restoredDrown.getMode() == RunnerEngine.Mode.PAUSED
+                        && restoredDrown.getResumeMode() == RunnerEngine.Mode.LIFE_LOSS
+                        && restoredDrown.getPlayerY() == drown.getPlayerY(),
+                "a saved drowning blink keeps the rider underwater at the final position");
+        drown.continueGame();
+        restoredDrown.continueGame();
+        completeLifeLoss(drown);
+        completeLifeLoss(restoredDrown);
+        check(drown.getMode() == RunnerEngine.Mode.COUNTDOWN && !drown.isInWater(),
+                "water state clears when the respawn countdown starts");
 
         RunnerEngine wall = placedAt(waterSeed, hole.end() - RunnerEngine.PLAYER_WIDTH - 1f,
                 RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
@@ -2641,6 +2747,7 @@ public final class RunnerEngineChecks {
         testDepression();
         testHoleAndExhaustedHealth();
         testSafeRespawn();
+        testLifeLossPauseAndRestore();
         testFailureAndPause();
         testSpeedAndManualPause();
         testWallStopAndJump();
