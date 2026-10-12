@@ -1780,6 +1780,139 @@ public final class RunnerEngineChecks {
                 "activity restore retains an enemy's platform and patrol position");
     }
 
+    private static void testPlatformRewards() {
+        boolean starTopEmptyBelow = false;
+        boolean starTopEnemyBelow = false;
+        boolean enemyTopEmptyBelow = false;
+        boolean enemyTopStarsBelow = false;
+        boolean starsOverWater = false;
+        for (long seed = 0; seed < 20; seed++) {
+            RunnerEngine course = new RunnerEngine();
+            course.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            course.generateAhead(100_000f);
+            for (RunnerEngine.Platform platform : course.getPlatforms()) {
+                if (platform.x >= 100_000f) break;
+                long topStars = course.getStars().stream()
+                        .filter(s -> s.platform == platform && !s.belowPlatform).count();
+                long belowStars = course.getStars().stream()
+                        .filter(s -> s.platform == platform && s.belowPlatform).count();
+                long topEnemies = course.getAntagonists().stream()
+                        .filter(e -> e.startingPlatform == platform).count();
+                float centerX = platform.x + platform.width / 2f;
+                long belowEnemies = course.getAntagonists().stream()
+                        .filter(e -> e.platform == null
+                                && Math.abs(e.x + RunnerEngine.PLAYER_WIDTH / 2f
+                                - centerX) < .01f).count();
+                check(platform.topContent == RunnerEngine.PlatformTop.STARS
+                                ? topStars >= 1 && topStars <= 10 && topEnemies == 0
+                                : topStars == 0 && topEnemies == 1,
+                        "every platform offers either a star row or one enemy on top");
+                check(platform.belowContent == RunnerEngine.PlatformBelow.NOTHING
+                                ? belowStars == 0 && belowEnemies == 0
+                                : platform.belowContent == RunnerEngine.PlatformBelow.STARS
+                                ? belowStars >= 1 && belowEnemies == 0
+                                : belowStars == 0 && belowEnemies == 1,
+                        "under a platform only its assigned optional reward appears");
+                check(platform.topContent == RunnerEngine.PlatformTop.STARS
+                                || platform.belowContent != RunnerEngine.PlatformBelow.ENEMY,
+                        "an enemy on top never shares a platform with one underneath");
+                check(platform.topContent == RunnerEngine.PlatformTop.ENEMY
+                                || platform.belowContent != RunnerEngine.PlatformBelow.STARS,
+                        "a star row on top never shares a platform with stars underneath");
+                if (platform.topContent == RunnerEngine.PlatformTop.STARS) {
+                    starTopEmptyBelow |= platform.belowContent
+                            == RunnerEngine.PlatformBelow.NOTHING;
+                    starTopEnemyBelow |= platform.belowContent
+                            == RunnerEngine.PlatformBelow.ENEMY;
+                    for (RunnerEngine.Hazard hazard : course.getHazards()) {
+                        if (hazard.x >= platform.end()) break;
+                        starsOverWater |= hazard.type == RunnerEngine.HazardType.HOLE
+                                && hazard.end() > platform.x;
+                    }
+                } else {
+                    enemyTopEmptyBelow |= platform.belowContent
+                            == RunnerEngine.PlatformBelow.NOTHING;
+                    enemyTopStarsBelow |= platform.belowContent
+                            == RunnerEngine.PlatformBelow.STARS;
+                }
+            }
+            float previousEnemyX = Float.NEGATIVE_INFINITY;
+            for (RunnerEngine.Antagonist foe : course.getAntagonists()) {
+                check(foe.spawnX - previousEnemyX > course.getVisibleWorldWidth()
+                                + RunnerEngine.PLAYER_WIDTH + 100f,
+                        "at most one ground or platform enemy occupies a screen");
+                previousEnemyX = foe.spawnX;
+            }
+        }
+        check(starTopEmptyBelow && starTopEnemyBelow && enemyTopEmptyBelow
+                        && enemyTopStarsBelow && starsOverWater,
+                "all four reward pairings and platforms over water are generated");
+
+        int[] checkpoints = {0, 190, 450, 499, 500, 1150, 1199, 1200, 1300};
+        for (long seed = 0; seed < 10; seed++) {
+            for (int metres : checkpoints) {
+                RunnerEngine visible = new RunnerEngine();
+                float carX = 140f + metres * RunnerEngine.WORLD_UNITS_PER_METER;
+                visible.restore(seed, RunnerEngine.MAX_LIVES, carX,
+                        RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                        0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING,
+                        RunnerEngine.Mode.RUNNING);
+                float left = Math.max(0f, carX - visible.getVisibleWorldWidth() * .3f);
+                float right = left + visible.getVisibleWorldWidth();
+                visible.generateAhead(right + 550f);
+                for (RunnerEngine.Platform platform : visible.getPlatforms()) {
+                    if (platform.x >= right) break;
+                    if (platform.end() <= left) continue;
+                    check(platform.topContent == RunnerEngine.PlatformTop.STARS
+                                    ? visible.getStars().stream().anyMatch(s ->
+                                    s.platform == platform && !s.belowPlatform)
+                                    : visible.getAntagonists().stream().anyMatch(e ->
+                                    e.platform == platform),
+                            "every visible uncollected platform has its top reward");
+                }
+                check(metres >= 500 || visible.getAntagonists().isEmpty(),
+                        "platform enemies stay locked until 500 metres");
+                check(metres >= 1200 || visible.getAntagonists().stream()
+                                .noneMatch(e -> e.type == RunnerEngine.EnemyType.MOVING),
+                        "red platform enemies stay locked until 1200 metres");
+            }
+        }
+
+        for (long seed = 0; seed < 8; seed++) {
+            RunnerEngine bulk = new RunnerEngine();
+            RunnerEngine streaming = new RunnerEngine();
+            bulk.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            streaming.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            bulk.generateAhead(100_000f);
+            for (int x = 15_000; x <= 100_000; x += 500) streaming.generateAhead(x);
+            check(bulk.getPlatforms().size() == streaming.getPlatforms().size()
+                            && bulk.getStars().size() == streaming.getStars().size()
+                            && bulk.getAntagonists().size() == streaming.getAntagonists().size(),
+                    "platform rewards do not depend on how far ahead the course is generated");
+            for (int i = 0; i < bulk.getPlatforms().size(); i++) {
+                RunnerEngine.Platform a = bulk.getPlatforms().get(i);
+                RunnerEngine.Platform b = streaming.getPlatforms().get(i);
+                check(a.x == b.x && a.width == b.width
+                                && a.topContent == b.topContent
+                                && a.belowContent == b.belowContent,
+                        "each platform keeps its reward pairing across generation schedules");
+            }
+            for (int i = 0; i < bulk.getAntagonists().size(); i++) {
+                RunnerEngine.Antagonist a = bulk.getAntagonists().get(i);
+                RunnerEngine.Antagonist b = streaming.getAntagonists().get(i);
+                check(a.spawnX == b.spawnX && a.type == b.type
+                                && (a.platform == null) == (b.platform == null),
+                        "enemy placement remains deterministic across generation schedules");
+            }
+        }
+    }
+
     private static void testPlatformBumpEliminatesEnemy() {
         for (long seed = 0; seed < 150; seed++) {
             RunnerEngine layout = new RunnerEngine();
@@ -1824,7 +1957,8 @@ public final class RunnerEngineChecks {
         throw new AssertionError("no turret with reachable underside found");
     }
 
-    private static RunnerEngine enemyAtPlatformEdge(boolean overWater) {
+    private static RunnerEngine enemyAtPlatformEdge(boolean overWater,
+                                                    boolean starsBelow) {
         for (long seed = 0; seed < 250; seed++) {
             RunnerEngine layout = new RunnerEngine();
             layout.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
@@ -1832,7 +1966,9 @@ public final class RunnerEngineChecks {
                     0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
             layout.generateAhead(55_000f);
             for (RunnerEngine.Antagonist foe : layout.getAntagonists()) {
-                if (foe.type != RunnerEngine.EnemyType.MOVING || foe.platform == null) continue;
+                if (foe.type != RunnerEngine.EnemyType.MOVING || foe.platform == null
+                        || (foe.platform.belowContent == RunnerEngine.PlatformBelow.STARS)
+                        != starsBelow) continue;
                 float edgeX = foe.platform.end() - RunnerEngine.PLAYER_WIDTH - .1f;
                 if (Math.abs(edgeX - foe.spawnX) >= 49f) continue;
                 boolean waterAtEdge = Float.isNaN(layout.surfaceYAt(
@@ -1867,11 +2003,13 @@ public final class RunnerEngineChecks {
             }
         }
         throw new AssertionError("no moving enemy with a "
-                + (overWater ? "water" : "land") + " platform edge found");
+                + (overWater ? "water" : "land")
+                + (starsBelow ? " and stars beneath" : " and empty space beneath")
+                + " platform edge found");
     }
 
     private static void testEnemyCanJumpOffSafePlatformEdge() {
-        RunnerEngine safe = enemyAtPlatformEdge(false);
+        RunnerEngine safe = enemyAtPlatformEdge(false, false);
         RunnerEngine.Antagonist foe = safe.getAntagonists().stream()
                 .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
                         && e.platform != null && e.x + RunnerEngine.PLAYER_WIDTH
@@ -1908,7 +2046,7 @@ public final class RunnerEngineChecks {
                         + RunnerEngine.PLAYER_WIDTH / 2f)) < .1f,
                 "enemy lands on the ground after leaving the platform and stays below it");
 
-        RunnerEngine blocked = enemyAtPlatformEdge(true);
+        RunnerEngine blocked = enemyAtPlatformEdge(true, false);
         RunnerEngine.Antagonist waterFoe = blocked.getAntagonists().stream()
                 .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
                         && e.platform != null && e.x + RunnerEngine.PLAYER_WIDTH
@@ -1919,6 +2057,30 @@ public final class RunnerEngineChecks {
                         && waterFoe.x + RunnerEngine.PLAYER_WIDTH
                         <= waterPlatform.end() + .01f,
                 "moving enemy refuses a platform edge jump into a water hole");
+
+        RunnerEngine guarded = enemyAtPlatformEdge(false, true);
+        RunnerEngine.Antagonist guardedFoe = guarded.getAntagonists().stream()
+                .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
+                        && e.platform != null
+                        && e.platform.belowContent == RunnerEngine.PlatformBelow.STARS
+                        && e.x + RunnerEngine.PLAYER_WIDTH >= e.platform.end() - .2f)
+                .findFirst().get();
+        RunnerEngine.Platform guardedPlatform = guardedFoe.platform;
+        float[] pickedUp = new float[(int) guarded.getStars().stream()
+                .filter(s -> s.platform == guardedPlatform && s.belowPlatform).count()];
+        int pickedUpCount = 0;
+        for (RunnerEngine.Star star : guarded.getStars()) {
+            if (star.platform == guardedPlatform && star.belowPlatform) {
+                pickedUp[pickedUpCount++] = star.x;
+            }
+        }
+        check(pickedUpCount > 0, "guarded platform starts with stars underneath");
+        guarded.restoreCollectedStars(pickedUp);
+        guarded.update(1f / 120f);
+        check(guardedFoe.platform == guardedPlatform
+                        && guardedFoe.x + RunnerEngine.PLAYER_WIDTH
+                        <= guardedPlatform.end() + .01f,
+                "moving enemy stays on its platform even after stars below were collected");
     }
 
     private static boolean openGroundUnderPlatform(RunnerEngine course,
@@ -1956,6 +2118,8 @@ public final class RunnerEngineChecks {
         check(drown.getLives() == RunnerEngine.MAX_LIVES && drown.isInWater()
                         && Math.abs(drown.getSpeed() - entrySpeed * .25f) < .01f,
                 "surface contact starts a 25% speed crossing without life loss");
+        check(drown.shouldShowWaterHint() && drown.getWaterEncounters() == 1,
+                "repeat-tap hint appears on the first water encounter");
         float initialWaterX = drown.getPlayerX();
         drown.update(.05f);
         check(drown.getPlayerX() > initialWaterX
@@ -1988,13 +2152,24 @@ public final class RunnerEngineChecks {
         check(!rescue.isInWater() && rescue.getLives() == RunnerEngine.MAX_LIVES
                         && rescue.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f >= hole.end()
                         && rescue.getVelocityY() < 0f
-                        && Math.abs(rescue.getSpeed() - preWaterSpeed * .25f) < .1f,
-                "regular taps get the car to the far bank for an automatic jump at quarter speed");
+                        && Math.abs(rescue.getSpeed() - preWaterSpeed) < .1f,
+                "regular taps get the car to the far bank and restore its entry speed");
+        RunnerEngine nextWater = placedAt(waterSeed, middle,
+                RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
+        nextWater.restoreWaterEncounters(rescue.getWaterEncounters());
+        nextWater.update(1f / 120f);
+        check(nextWater.isInWater() && nextWater.getWaterEncounters() == 2
+                        && !nextWater.shouldShowWaterHint(),
+                "repeat-tap hint stays hidden at the next water encounter");
+        nextWater.startNewGame(waterSeed);
+        check(nextWater.getWaterEncounters() == 0,
+                "starting a fresh run restores the first-water hint");
         float[] exitState = rescue.getWaterState();
         for (int step = 0; step < 90; step++) rescue.update(1f / 120f);
         check(rescue.getLives() == RunnerEngine.MAX_LIVES
-                        && Math.abs(rescue.getSpeed() - preWaterSpeed * .25f) < .1f,
-                "exit speed remains one quarter of pre-water speed on flat ground");
+                        && rescue.getSpeed() >= preWaterSpeed
+                        && rescue.getSpeed() <= rescue.getBaseSpeed() + .1f,
+                "water exit resumes ordinary cruise speed and acceleration");
         RunnerEngine restoredExit = new RunnerEngine();
         restoredExit.restore(waterSeed, rescue.getLives(), rescue.getPlayerX(),
                 rescue.getPlayerY(), rescue.getVelocityY(), 0f,
@@ -2063,12 +2238,14 @@ public final class RunnerEngineChecks {
                 saved.getElapsedRunSeconds(), saved.getTerrainSpeedMultiplier(),
                 saved.getMode(), saved.getResumeMode());
         restored.restoreWaterState(state);
+        restored.restoreWaterEncounters(saved.getWaterEncounters());
         float pausedX = restored.getPlayerX();
         restored.update(3f);
         check(restored.isInWater() && restored.getMode() == RunnerEngine.Mode.PAUSED
                         && restored.getPlayerX() == pausedX
-                        && Math.abs(restored.getSpeed() - saved.getSpeed()) < .01f,
-                "restored water crossing stays paused with its original drift speed");
+                        && Math.abs(restored.getSpeed() - saved.getSpeed()) < .01f
+                        && restored.shouldShowWaterHint(),
+                "restored water crossing keeps its drift speed and first hint state");
         saved.continueGame();
         restored.continueGame();
         saved.jump();
@@ -2106,6 +2283,7 @@ public final class RunnerEngineChecks {
         float previousX = Float.NaN;
         float previousY = Float.NaN;
         RunnerEngine.StarColor previousColor = null;
+        RunnerEngine.Star previousPlatformStar = null;
         for (RunnerEngine.Star star : layout.getStars()) {
             check(star.x >= 140f + 200f * RunnerEngine.WORLD_UNITS_PER_METER,
                     "stars begin after 200 physical metres");
@@ -2113,49 +2291,50 @@ public final class RunnerEngineChecks {
                             * RunnerEngine.WORLD_UNITS_PER_METER,
                     "each color appears only after its unlock distance");
             sawColor[star.color.ordinal()] = true;
-            if (!Float.isNaN(previousX)) {
-                float gap = star.x - previousX;
-                if (gap > 50f) {
-                    check(groupSize >= 1 && groupSize <= 10
-                                    && gap >= 100f * RunnerEngine.WORLD_UNITS_PER_METER
-                                    && gap <= 750f * RunnerEngine.WORLD_UNITS_PER_METER,
-                            "one to ten stars form groups spaced 100 to 750 metres apart");
-                    groupSize = 0;
-                } else {
-                    check(gap >= 36f && gap <= 48f, "stars in a group have visible spacing");
-                    check(Math.abs(star.y - previousY) < .01f,
-                            "all stars in a group share the same height");
-                    sawMixedGroup |= previousColor != star.color;
+            if (star.platform == null) {
+                if (!Float.isNaN(previousX)) {
+                    float gap = star.x - previousX;
+                    if (gap > 50f) {
+                        check(groupSize >= 1 && groupSize <= 10
+                                        && gap >= 100f * RunnerEngine.WORLD_UNITS_PER_METER
+                                        && gap <= 750f * RunnerEngine.WORLD_UNITS_PER_METER,
+                                "ambient star groups remain 100 to 750 metres apart");
+                        groupSize = 0;
+                    } else {
+                        check(gap >= 36f && gap <= 48f,
+                                "ambient stars in a group have visible spacing");
+                        check(Math.abs(star.y - previousY) < .01f,
+                                "ambient stars in a group share the same height");
+                        sawMixedGroup |= previousColor != star.color;
+                    }
                 }
+                groupSize++;
+                previousX = star.x;
+                previousY = star.y;
+                previousColor = star.color;
+            } else {
+                if (previousPlatformStar != null && previousPlatformStar.platform == star.platform
+                        && !star.belowPlatform && !previousPlatformStar.belowPlatform) {
+                    check(Math.abs(star.y - previousPlatformStar.y) < .01f,
+                            "platform star rows share a height");
+                    sawMixedGroup |= previousPlatformStar.color != star.color;
+                }
+                previousPlatformStar = star;
             }
-            groupSize++;
-            previousX = star.x;
-            previousY = star.y;
-            previousColor = star.color;
 
             float ground = layout.surfaceYAt(star.x);
-            if (Float.isNaN(ground)) {
-                sawHoleStar = true;
-                check(Math.abs(star.bottom() - (RunnerEngine.GROUND_Y
-                                - RunnerEngine.JUMP_HEIGHT)) < .1f,
-                        "star over a hole sits at maximum jump height");
-                continue;
-            }
-            RunnerEngine.Platform overhead = null;
-            for (RunnerEngine.Platform platform : layout.getPlatforms()) {
-                if (platform.x > star.x + RunnerEngine.STAR_RADIUS) break;
-                if (star.x + RunnerEngine.STAR_RADIUS > platform.x
-                        && star.x - RunnerEngine.STAR_RADIUS < platform.end()) {
-                    overhead = platform;
-                    break;
-                }
-            }
-            if (overhead != null && star.bottom() < overhead.top) {
+            RunnerEngine.Platform overhead = star.platform;
+            if (overhead != null && !star.belowPlatform) {
                 sawPlatformStar = true;
                 float height = overhead.top - star.bottom();
                 check(height >= RunnerEngine.PLAYER_HEIGHT / 2f - .1f
                                 && height <= RunnerEngine.JUMP_HEIGHT + .1f,
                         "star above a platform uses its top as the height reference");
+            } else if (Float.isNaN(ground)) {
+                sawHoleStar = true;
+                check(Math.abs(star.bottom() - (RunnerEngine.GROUND_Y
+                                - RunnerEngine.JUMP_HEIGHT)) < .1f,
+                        "star over a hole sits at maximum jump height");
             } else {
                 float height = ground - star.bottom();
                 check(height >= RunnerEngine.PLAYER_HEIGHT / 2f - .1f
@@ -2180,6 +2359,7 @@ public final class RunnerEngineChecks {
             float lastX = Float.NaN;
             float lastY = Float.NaN;
             for (RunnerEngine.Star star : varied.getStars()) {
+                if (star.platform != null) continue;
                 if (!Float.isNaN(lastX)) {
                     float gap = star.x - lastX;
                     if (gap < 50f) {
@@ -2324,6 +2504,7 @@ public final class RunnerEngineChecks {
         testProjectileTerrainCollisions();
         testSuspendedPlatforms();
         testPlatformEnemyPatrolAndRestore();
+        testPlatformRewards();
         testPlatformBumpEliminatesEnemy();
         testEnemyCanJumpOffSafePlatformEdge();
         testWaterAndStars();
