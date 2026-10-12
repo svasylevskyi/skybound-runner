@@ -39,6 +39,8 @@ public final class RunnerEngine {
     private static final float DAMAGE_RECOVERY_SECONDS = .65f;
     private static final float DAMAGE_BLINK_SECONDS = .5f;
     private static final float DAMAGE_BLINK_INTERVAL = .06f;
+    private static final float LIFE_LOSS_SECONDS = .5f;
+    private static final float LIFE_LOSS_BLINK_INTERVAL = .06f;
     private static final float SHOT_INTERVAL_SECONDS = 1.5f;
     private static final float SHOT_SPEED = 380f;
     private static final float SHOT_BOUNCE_VELOCITY = -200f;
@@ -59,7 +61,7 @@ public final class RunnerEngine {
     private static final float SLOPE_RECOVERY_PER_SECOND = 1.5f;
     private static final HazardType[] HAZARD_TYPES = HazardType.values();
 
-    public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER }
+    public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER, LIFE_LOSS }
     public enum HazardType { HOLE, WALL, DIP }
     public enum EnemyType { STATIONARY, MOVING }
     public enum PlatformTop { STARS, ENEMY }
@@ -318,6 +320,7 @@ public final class RunnerEngine {
     private int health = MAX_HEALTH;
     private float damageRecoverySeconds;
     private float countdownSeconds;
+    private float lifeLossRemainingSeconds;
     private double elapsedRunSeconds;
     private float terrainSpeedMultiplier = 1f;
     private boolean waitingForJump;
@@ -376,6 +379,7 @@ public final class RunnerEngine {
         firstJumpCompleted = false;
         health = MAX_HEALTH;
         damageRecoverySeconds = 0f;
+        lifeLossRemainingSeconds = 0f;
         elapsedRunSeconds = 0d;
         terrainSpeedMultiplier = 1f;
         waitingForJump = false;
@@ -745,6 +749,11 @@ public final class RunnerEngine {
             updateBonusPopups(Math.max(0f, seconds));
             updateStarBursts(Math.max(0f, seconds));
             updateEnemyBursts(Math.max(0f, seconds));
+        }
+        if (mode == Mode.LIFE_LOSS) {
+            lifeLossRemainingSeconds -= Math.max(0f, seconds);
+            if (lifeLossRemainingSeconds <= 0f) finishLifeLoss();
+            return;
         }
         if (mode == Mode.COUNTDOWN) {
             countdownSeconds -= Math.max(0f, seconds);
@@ -1365,14 +1374,22 @@ public final class RunnerEngine {
 
     private void loseLife() {
         lives--;
-        inWater = false;
-        waterEntrySpeed = 0f;
-        waterVerticalSpeed = 0f;
         controlledJumpInProgress = false;
         projectiles.clear();
+        lifeLossRemainingSeconds = LIFE_LOSS_SECONDS;
+        mode = Mode.LIFE_LOSS;
         if (lives == 0) {
             bestDistance = Math.max(bestDistance, getDistance());
             bestScore = Math.max(bestScore, getScore());
+        }
+    }
+
+    private void finishLifeLoss() {
+        lifeLossRemainingSeconds = 0f;
+        inWater = false;
+        waterEntrySpeed = 0f;
+        waterVerticalSpeed = 0f;
+        if (lives == 0) {
             mode = Mode.GAME_OVER;
             return;
         }
@@ -1421,7 +1438,7 @@ public final class RunnerEngine {
     }
 
     public void pause() {
-        if (mode == Mode.RUNNING || mode == Mode.COUNTDOWN) {
+        if (mode == Mode.RUNNING || mode == Mode.COUNTDOWN || mode == Mode.LIFE_LOSS) {
             resumeMode = mode;
             mode = Mode.PAUSED;
         }
@@ -1569,13 +1586,20 @@ public final class RunnerEngine {
         }
         if (savedMode == Mode.TITLE) {
             mode = Mode.TITLE;
-        } else if (savedMode == Mode.GAME_OVER || lives == 0) {
+        } else if (savedMode == Mode.GAME_OVER
+                || (lives == 0 && savedMode != Mode.LIFE_LOSS
+                && !(savedMode == Mode.PAUSED && savedResumeMode == Mode.LIFE_LOSS))) {
             lives = 0;
             mode = Mode.GAME_OVER;
         } else {
             mode = Mode.PAUSED;
             resumeMode = savedMode == Mode.PAUSED ? savedResumeMode : savedMode;
-            if (resumeMode != Mode.COUNTDOWN) resumeMode = Mode.RUNNING;
+            if (resumeMode != Mode.COUNTDOWN && resumeMode != Mode.LIFE_LOSS) {
+                resumeMode = Mode.RUNNING;
+            }
+            if (resumeMode == Mode.LIFE_LOSS) {
+                lifeLossRemainingSeconds = LIFE_LOSS_SECONDS;
+            }
         }
     }
 
@@ -1755,6 +1779,21 @@ public final class RunnerEngine {
     public boolean hasCompletedFirstJump() { return firstJumpCompleted; }
     public int getHealth() { return health; }
     public float getDamageRecoverySeconds() { return damageRecoverySeconds; }
+    public float getLifeLossRemainingSeconds() { return lifeLossRemainingSeconds; }
+    public boolean isLifeLossBlinkVisible() {
+        if (mode != Mode.LIFE_LOSS
+                && !(mode == Mode.PAUSED && resumeMode == Mode.LIFE_LOSS)) return true;
+        float elapsed = LIFE_LOSS_SECONDS - lifeLossRemainingSeconds;
+        return ((int) (elapsed / LIFE_LOSS_BLINK_INTERVAL) & 1) == 0;
+    }
+    public void restoreLifeLossRemainingSeconds(float remaining) {
+        if (mode == Mode.LIFE_LOSS
+                || (mode == Mode.PAUSED && resumeMode == Mode.LIFE_LOSS)) {
+            lifeLossRemainingSeconds = Float.isFinite(remaining)
+                    ? Math.max(0f, Math.min(LIFE_LOSS_SECONDS, remaining))
+                    : LIFE_LOSS_SECONDS;
+        }
+    }
     public boolean isDamageBlinkLight() {
         float sinceHit = DAMAGE_RECOVERY_SECONDS - damageRecoverySeconds;
         return sinceHit >= 0f && sinceHit < DAMAGE_BLINK_SECONDS
@@ -1784,7 +1823,8 @@ public final class RunnerEngine {
             if (hazard.type == HazardType.HOLE && Math.abs(hazard.x - state[1]) < .1f
                     && playerX + PLAYER_WIDTH / 2f >= hazard.x + 4f
                     && playerX + PLAYER_WIDTH / 2f < hazard.end()
-                    && playerY + PLAYER_HEIGHT < WORLD_HEIGHT
+                    && (playerY + PLAYER_HEIGHT < WORLD_HEIGHT
+                    || (mode == Mode.PAUSED && resumeMode == Mode.LIFE_LOSS))
                     && state[2] > 0f && Float.isFinite(state[2])
                     && Float.isFinite(state[3])) {
                 inWater = true;

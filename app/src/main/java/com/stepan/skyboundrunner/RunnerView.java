@@ -27,8 +27,8 @@ public final class RunnerView extends View {
     private static final int SAND_GRAIN_DARK = Color.argb(82, 205, 145, 86);
     private static final int GROUND_LINE = Color.rgb(210, 123, 61);
     private static final float GROUND_LINE_WIDTH = RunnerEngine.PLAYER_HEIGHT / 6f;
-    private static final int WATER = Color.rgb(36, 140, 213);
-    private static final int WATER_EDGE = Color.rgb(171, 239, 255);
+    private static final int WATER = Color.argb(64, 36, 140, 213);
+    private static final int WATER_EDGE = Color.argb(64, 171, 239, 255);
     private static final int FAR_CITY = Color.rgb(119, 160, 187);
     private static final int FAR_CITY_EDGE = Color.rgb(108, 150, 180);
     private static final int FAR_WINDOWS = Color.rgb(147, 183, 203);
@@ -56,7 +56,7 @@ public final class RunnerView extends View {
     };
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int DAMAGE_BLINK_BLUE = Color.rgb(218, 245, 255);
-    private static final int CAR_GLASS = Color.rgb(91, 162, 210);
+    private static final int BIKE_ACCENT = Color.rgb(91, 162, 210);
     private static final float HOVER_GAP = 2f;
     private static final int ENEMY_RED = Color.rgb(222, 45, 54);
     private static final int ENEMY_RED_WEAPON = Color.rgb(162, 34, 45);
@@ -72,7 +72,7 @@ public final class RunnerView extends View {
     private final Path terrainPath = new Path();
     private final Path heartPath = new Path();
     private final Path turretPath = new Path();
-    private final Path carPath = new Path();
+    private final Path bikePath = new Path();
     private final Path palmPath = new Path();
     private final Path grassPath = new Path();
     private final Path waterPath = new Path();
@@ -141,6 +141,7 @@ public final class RunnerView extends View {
 
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN
+                || engine.getMode() == RunnerEngine.Mode.LIFE_LOSS
                 || (engine.getMode() == RunnerEngine.Mode.GAME_OVER
                 && (!engine.getBonusPopups().isEmpty()
                 || !engine.getStarBursts().isEmpty()
@@ -286,7 +287,7 @@ public final class RunnerView extends View {
         drawSandGrains(canvas, cameraX, right);
         drawGroundContour(canvas, cameraX, right);
         // Water over the submerged hull is translucent during a crossing.
-        if (engine.isInWater()) drawHovercar(canvas);
+        if (engine.isInWater()) drawMotorcycleRider(canvas);
         drawWater(canvas, cameraX, right);
         drawGrass(canvas, cameraX, right);
         paint.setStyle(Paint.Style.FILL);
@@ -317,7 +318,7 @@ public final class RunnerView extends View {
         }
         drawStarBursts(canvas, cameraX, right);
         drawEnemyBursts(canvas, cameraX, right);
-        if (!engine.isInWater()) drawHovercar(canvas);
+        if (!engine.isInWater()) drawMotorcycleRider(canvas);
         canvas.restore();
     }
 
@@ -535,10 +536,7 @@ public final class RunnerView extends View {
             waterPath.lineTo(hazard.end(), waterY(hazard.end()));
             waterPath.lineTo(hazard.end(), RunnerEngine.WORLD_HEIGHT);
             waterPath.close();
-            boolean overCar = engine.isInWater()
-                    && Math.abs(hazard.x - engine.getActiveWaterHoleX()) < .1f;
-            paint.setColor(overCar ? Color.argb(77, Color.red(WATER),
-                    Color.green(WATER), Color.blue(WATER)) : WATER);
+            paint.setColor(WATER);
             paint.setStyle(Paint.Style.FILL);
             canvas.drawPath(waterPath, paint);
 
@@ -604,49 +602,69 @@ public final class RunnerView extends View {
         }
     }
 
-    private void drawHovercar(Canvas canvas) {
+    private void drawMotorcycleRider(Canvas canvas) {
+        if (!engine.isLifeLossBlinkVisible()) return;
         float pitch = engine.getPlayerPitchDegrees();
         double radians = Math.toRadians(pitch);
         float footX = engine.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f;
         float footY = engine.getPlayerY() + RunnerEngine.PLAYER_HEIGHT;
         canvas.save();
-        // Keep the lowest point two world pixels above the surface, measured
-        // perpendicular to the car's orientation (and to a slope when grounded).
+        // Preserve the old visual footprint and two-pixel clearance; the
+        // collision box, jump, and slope pitch still come from the engine.
         canvas.translate(footX - HOVER_GAP * (float) Math.sin(radians),
                 footY - HOVER_GAP * (float) Math.cos(radians));
         canvas.rotate(-pitch);
-        paint.setStyle(Paint.Style.FILL);
-
-        // The long shuttle is a visual silhouette around the original hitbox.
-        // Its cabin bulges upward; the tapered nose points right.
         boolean blink = engine.isDamageBlinkLight();
-        paint.setColor(blink ? DAMAGE_BLINK_BLUE : AVATAR);
-        carPath.rewind();
-        carPath.moveTo(-28f, -8f);
-        carPath.lineTo(-24f, -16f);
-        carPath.lineTo(-20f, -30f);
-        carPath.lineTo(-17f, -30f);
-        carPath.lineTo(-13f, -22f);
-        carPath.lineTo(-8f, -23f);
-        carPath.quadTo(-5f, -43f, 2f, -43f);
-        carPath.quadTo(10f, -43f, 13f, -23f);
-        carPath.lineTo(19f, -21f);
-        carPath.lineTo(28f, -12f);
-        carPath.lineTo(29f, -9f);
-        carPath.lineTo(21f, -4f);
-        carPath.quadTo(2f, 0f, -21f, -3f);
-        carPath.close();
-        canvas.drawPath(carPath, paint);
+        int silhouette = blink ? DAMAGE_BLINK_BLUE : AVATAR;
+        int detail = blink ? DAMAGE_BLINK_BLUE : BIKE_ACCENT;
 
-        paint.setColor(blink ? DAMAGE_BLINK_BLUE : CAR_GLASS);
-        carPath.rewind();
-        carPath.moveTo(-5f, -25f);
-        carPath.lineTo(-3f, -35f);
-        carPath.quadTo(1f, -40f, 4f, -39f);
-        carPath.quadTo(9f, -35f, 10f, -25f);
-        carPath.close();
-        canvas.drawPath(carPath, paint);
-        canvas.drawRoundRect(-28f, -11f, -24f, -7f, 1f, 1f, paint);
+        // Wheels and triangular motorcycle chassis fill the former shuttle width.
+        paint.setColor(silhouette);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setStrokeWidth(3.6f);
+        canvas.drawCircle(-20f, -8f, 6f, paint);
+        canvas.drawCircle(20f, -8f, 6f, paint);
+        bikePath.rewind();
+        bikePath.moveTo(-20f, -8f);
+        bikePath.lineTo(-9f, -18f);
+        bikePath.lineTo(5f, -9f);
+        bikePath.lineTo(20f, -8f);
+        bikePath.lineTo(10f, -20f);
+        bikePath.lineTo(-9f, -18f);
+        bikePath.lineTo(-20f, -8f);
+        canvas.drawPath(bikePath, paint);
+        canvas.drawLine(10f, -20f, 20f, -8f, paint);
+        canvas.drawLine(11f, -21f, 23f, -24f, paint);
+        canvas.drawLine(21f, -25f, 27f, -25f, paint);
+        canvas.drawLine(-9f, -19f, -15f, -22f, paint);
+
+        // A forward-leaning rider: helmet, jacket, arms, and bent leg.
+        paint.setStyle(Paint.Style.FILL);
+        canvas.drawRoundRect(-15f, -23f, -3f, -19f, 2f, 2f, paint);
+        bikePath.rewind();
+        bikePath.moveTo(-8f, -29f);
+        bikePath.lineTo(-2f, -34f);
+        bikePath.lineTo(5f, -30f);
+        bikePath.lineTo(1f, -21f);
+        bikePath.lineTo(-8f, -23f);
+        bikePath.close();
+        canvas.drawPath(bikePath, paint);
+        canvas.drawCircle(-1f, -39f, 5f, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3.4f);
+        canvas.drawLine(2f, -30f, 11f, -26f, paint);
+        canvas.drawLine(11f, -26f, 22f, -25f, paint);
+        canvas.drawLine(-6f, -23f, 4f, -16f, paint);
+        canvas.drawLine(4f, -16f, -4f, -10f, paint);
+
+        paint.setColor(detail);
+        paint.setStyle(Paint.Style.FILL);
+        canvas.drawCircle(-20f, -8f, 2f, paint);
+        canvas.drawCircle(20f, -8f, 2f, paint);
+        canvas.drawRoundRect(-2f, -42f, 3f, -39f, 1f, 1f, paint);
+        canvas.drawRoundRect(7f, -20f, 14f, -17f, 1.5f, 1.5f, paint);
         canvas.restore();
     }
 
@@ -784,7 +802,8 @@ public final class RunnerView extends View {
         drawLives(canvas, logicalWidth - 133f, 16f, 22f, 5f, -1f);
         drawHealth(canvas);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
-                || engine.getMode() == RunnerEngine.Mode.COUNTDOWN) {
+                || engine.getMode() == RunnerEngine.Mode.COUNTDOWN
+                || engine.getMode() == RunnerEngine.Mode.LIFE_LOSS) {
             drawPauseButton(canvas);
         }
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
@@ -867,7 +886,7 @@ public final class RunnerView extends View {
 
     private void drawMenu(Canvas canvas) {
         RunnerEngine.Mode mode = engine.getMode();
-        if (mode == RunnerEngine.Mode.RUNNING) return;
+        if (mode == RunnerEngine.Mode.RUNNING || mode == RunnerEngine.Mode.LIFE_LOSS) return;
         float midX = logicalWidth / 2f;
         float midY = RunnerEngine.WORLD_HEIGHT / 2f;
         if (mode == RunnerEngine.Mode.PAUSED) {
@@ -928,7 +947,8 @@ public final class RunnerView extends View {
         float x = event.getX() / scale;
         float y = event.getY() / scale;
         RunnerEngine.Mode mode = engine.getMode();
-        if ((mode == RunnerEngine.Mode.RUNNING || mode == RunnerEngine.Mode.COUNTDOWN)
+        if ((mode == RunnerEngine.Mode.RUNNING || mode == RunnerEngine.Mode.COUNTDOWN
+                || mode == RunnerEngine.Mode.LIFE_LOSS)
                 && x >= logicalWidth - 62f && y >= 0f && y <= 64f) {
             engine.pause();
             lastFrameNanos = 0L;
@@ -981,6 +1001,7 @@ public final class RunnerView extends View {
         out.putBoolean("waitingForJump", engine.isWaitingForJump());
         out.putInt("health", engine.getHealth());
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
+        out.putFloat("lifeLossRemaining", engine.getLifeLossRemainingSeconds());
         out.putFloatArray("defeatedAntagonists", engine.getDefeatedAntagonists());
         out.putFloat("farthestX", engine.getFarthestX());
         out.putInt("bonusPoints", engine.getBonusPoints());
@@ -1022,6 +1043,7 @@ public final class RunnerView extends View {
                     saved.getBoolean("jumpInProgress", false),
                     saved.getFloatArray("antagonistState"),
                     saved.getFloatArray("coloredProjectiles"));
+            engine.restoreLifeLossRemainingSeconds(saved.getFloat("lifeLossRemaining", .5f));
             engine.restoreTerrainStop(saved.getBoolean("waitingForJump", false));
             engine.restoreWaterState(saved.getFloatArray("waterState"));
             engine.restoreWaterEncounters(saved.getInt("waterEncounters", 0));
