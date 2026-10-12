@@ -18,6 +18,8 @@ public final class RunnerEngine {
     public static final float PROJECTILE_RADIUS = 6f;
     public static final float PLATFORM_THICKNESS = 10f;
     public static final float STAR_RADIUS = 11f;
+    public static final float ABILITY_RADIUS = STAR_RADIUS * 1.5f;
+    public static final float PLAYER_SHOT_RADIUS = 5f;
     public static final float WATER_SURFACE_Y = GROUND_Y + 2f;
     // Muzzle position relative to the enemy's 32 x 46 collision bounds.
     public static final float MUZZLE_X = -2f;
@@ -43,6 +45,8 @@ public final class RunnerEngine {
     private static final float LIFE_LOSS_BLINK_INTERVAL = .06f;
     private static final float SHOT_INTERVAL_SECONDS = 1.5f;
     private static final float SHOT_SPEED = 380f;
+    private static final float PLAYER_SHOT_SPEED = 560f;
+    private static final float ABILITY_REAPPEAR_DISTANCE = 500f * WORLD_UNITS_PER_METER;
     private static final float SHOT_BOUNCE_VELOCITY = -200f;
     public static final float BASE_SPEED = 235f;
     private static final float SPEED_STEP = 7f;
@@ -64,6 +68,7 @@ public final class RunnerEngine {
     public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER, LIFE_LOSS }
     public enum HazardType { HOLE, WALL, DIP }
     public enum EnemyType { STATIONARY, MOVING }
+    public enum AbilityType { DOUBLE_JUMP, SHOOTING }
     public enum PlatformTop { STARS, ENEMY }
     public enum PlatformBelow { NOTHING, STARS, ENEMY }
     public enum StarColor {
@@ -202,6 +207,26 @@ public final class RunnerEngine {
         public float getY() { return y; }
     }
 
+    public static final class PlayerShot {
+        private float x;
+        public final float y;
+
+        private PlayerShot(float x, float y) { this.x = x; this.y = y; }
+        public float getX() { return x; }
+    }
+
+    public static final class AbilityIcon {
+        public final float x;
+        public final float y;
+        public final AbilityType type;
+
+        private AbilityIcon(float x, float y, AbilityType type) {
+            this.x = x;
+            this.y = y;
+            this.type = type;
+        }
+    }
+
     public static final class BonusPopup {
         public final float x;
         public final float y;
@@ -291,6 +316,8 @@ public final class RunnerEngine {
     private final List<Antagonist> antagonists = new ArrayList<>();
     private final List<Float> defeatedAntagonists = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
+    private final List<PlayerShot> playerShots = new ArrayList<>();
+    private final List<AbilityIcon> abilityIcons = new ArrayList<>();
     private final List<BonusPopup> bonusPopups = new ArrayList<>();
     private final List<Star> stars = new ArrayList<>();
     private final List<Float> collectedStars = new ArrayList<>();
@@ -307,6 +334,8 @@ public final class RunnerEngine {
     private int nextPlatformEnemyIndex;
     private float nextStarGroupX;
     private float lastStarGroupEndX;
+    private float nextDoubleJumpX;
+    private float nextShootingX;
     private float visibleWorldWidth = 960f;
     private long seed;
     private int lives = MAX_LIVES;
@@ -316,7 +345,13 @@ public final class RunnerEngine {
     private float playerY;
     private float velocityY;
     private boolean controlledJumpInProgress;
+    private boolean secondJumpUsed;
     private boolean firstJumpCompleted;
+    private boolean doubleJumpEnabled;
+    private boolean shootingEnabled;
+    private boolean doubleJumpHintShown;
+    private float doubleJumpHintSeconds;
+    private int abilityDamagePoints;
     private int health = MAX_HEALTH;
     private float damageRecoverySeconds;
     private float countdownSeconds;
@@ -357,6 +392,8 @@ public final class RunnerEngine {
         antagonists.clear();
         defeatedAntagonists.clear();
         projectiles.clear();
+        playerShots.clear();
+        abilityIcons.clear();
         bonusPopups.clear();
         stars.clear();
         collectedStars.clear();
@@ -370,13 +407,21 @@ public final class RunnerEngine {
         nextStarGroupX = START_X + StarColor.BLUE.unlockMetres * WORLD_UNITS_PER_METER
                 + starRandom.nextInt(1001);
         lastStarGroupEndX = Float.NaN;
+        nextDoubleJumpX = START_X + 1000f * WORLD_UNITS_PER_METER;
+        nextShootingX = START_X + 1500f * WORLD_UNITS_PER_METER;
         playerX = START_X;
         farthestX = START_X;
         bonusPoints = 0;
         playerY = GROUND_Y - PLAYER_HEIGHT;
         velocityY = 0f;
         controlledJumpInProgress = false;
+        secondJumpUsed = false;
         firstJumpCompleted = false;
+        doubleJumpEnabled = false;
+        shootingEnabled = false;
+        doubleJumpHintShown = false;
+        doubleJumpHintSeconds = 0f;
+        abilityDamagePoints = 0;
         health = MAX_HEALTH;
         damageRecoverySeconds = 0f;
         lifeLossRemainingSeconds = 0f;
@@ -435,24 +480,27 @@ public final class RunnerEngine {
         }
         generateStarsAhead(worldX);
         generatePlatformEnemiesAhead(worldX);
-        if (getCourseDistance() < 500) return;
-        while (nextAntagonistX < worldX) {
-            float x = nextAntagonistX;
-            if (x >= START_X + MOVING_ENEMY_START_DISTANCE
-                    && getCourseDistance() < 1200) break;
-            // Choose a type without consuming the spawn RNG, so existing enemy locations stay put.
-            EnemyType type = enemyTypeAt(x);
-            float surface = surfaceYAt(x + PLAYER_WIDTH / 2f);
-            if (!wasDefeated(x) && !Float.isNaN(surface)
-                    && !overlapsPlatform(x) && platformEnemySlotFree(x)
-                    && canSpawnAt(x, type)) {
-                addAntagonist(x, surface - PLAYER_HEIGHT, type, null);
+        if (getCourseDistance() >= 500) {
+            while (nextAntagonistX < worldX) {
+                float x = nextAntagonistX;
+                if (x >= START_X + MOVING_ENEMY_START_DISTANCE
+                        && getCourseDistance() < 1200) break;
+                // Choose a type without consuming the spawn RNG, so existing enemy locations stay put.
+                EnemyType type = enemyTypeAt(x);
+                float surface = surfaceYAt(x + PLAYER_WIDTH / 2f);
+                if (!wasDefeated(x) && !Float.isNaN(surface)
+                        && !overlapsPlatform(x) && platformEnemySlotFree(x)
+                        && canSpawnAt(x, type) && farFromAbilityIcons(x + PLAYER_WIDTH / 2f,
+                        PLAYER_WIDTH / 2f + (type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f))) {
+                    addAntagonist(x, surface - PLAYER_HEIGHT, type, null);
+                }
+                // Leave enough room for both enemies to patrol without sharing a screen.
+                nextAntagonistX += Math.max(1400f,
+                        visibleWorldWidth + PLAYER_WIDTH + 2f * ENEMY_PATROL_RANGE + 20f)
+                        + antagonistRandom.nextInt(1200);
             }
-            // Leave enough room for both enemies to patrol without sharing a screen.
-            nextAntagonistX += Math.max(1400f,
-                    visibleWorldWidth + PLAYER_WIDTH + 2f * ENEMY_PATROL_RANGE + 20f)
-                    + antagonistRandom.nextInt(1200);
         }
+        generateAbilitiesAhead(worldX);
     }
 
     private Platform addPlatform(float x, float width, float clearance) {
@@ -629,6 +677,84 @@ public final class RunnerEngine {
         }
     }
 
+    private void generateAbilitiesAhead(float worldX) {
+        // The terrain, stars and enemies around a candidate have already been
+        // generated. Keeping half a viewport of lead avoids later spawns entering
+        // the reserved clear space around an icon.
+        float limit = worldX - visibleWorldWidth / 2f - PLAYER_WIDTH;
+        for (AbilityType type : AbilityType.values()) {
+            if (hasAbility(type) || activeIcon(type) != null) continue;
+            float candidate = type == AbilityType.DOUBLE_JUMP ? nextDoubleJumpX : nextShootingX;
+            if (farthestX + visibleWorldWidth < candidate) continue;
+            while (candidate <= limit) {
+                if (validAbilityAnchor(candidate, type)) {
+                    abilityIcons.add(new AbilityIcon(candidate, abilityYAt(candidate, type), type));
+                    break;
+                }
+                candidate += 30f;
+            }
+            if (type == AbilityType.DOUBLE_JUMP) nextDoubleJumpX = candidate;
+            else nextShootingX = candidate;
+        }
+    }
+
+    private boolean validAbilityAnchor(float x, AbilityType type) {
+        for (Platform platform : platforms) {
+            if (platform.x > x + ABILITY_RADIUS) break;
+            if (x + ABILITY_RADIUS > platform.x
+                    && x - ABILITY_RADIUS < platform.end()) return false;
+        }
+        float iconBottom = abilityYAt(x, type) + ABILITY_RADIUS;
+        for (int sample = -1; sample <= 1; sample++) {
+            float surface = surfaceYAt(x + sample * ABILITY_RADIUS);
+            if (!Float.isNaN(surface) && iconBottom >= surface - 2f) return false;
+        }
+        float gap = visibleWorldWidth / 2f + ABILITY_RADIUS;
+        for (Star star : stars) {
+            if (Math.abs(star.x - x) < gap + STAR_RADIUS) return false;
+        }
+        for (Antagonist enemy : antagonists) {
+            float patrol = enemy.type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
+            if (Math.abs(enemy.spawnX + PLAYER_WIDTH / 2f - x)
+                    < gap + PLAYER_WIDTH / 2f + patrol) return false;
+        }
+        for (float reserved : reservedPlatformEnemies) {
+            if (Math.abs(reserved + PLAYER_WIDTH / 2f - x)
+                    < gap + PLAYER_WIDTH / 2f + ENEMY_PATROL_RANGE) return false;
+        }
+        for (AbilityIcon icon : abilityIcons) {
+            if (Math.abs(icon.x - x) < gap + ABILITY_RADIUS) return false;
+        }
+        return true;
+    }
+
+    private boolean farFromAbilityIcons(float center, float extent) {
+        for (AbilityIcon icon : abilityIcons) {
+            if (Math.abs(icon.x - center)
+                    < visibleWorldWidth / 2f + ABILITY_RADIUS + extent) return false;
+        }
+        return true;
+    }
+
+    private float abilityYAt(float x, AbilityType type) {
+        float ground = surfaceYAt(x);
+        if (Float.isNaN(ground)) return GROUND_Y - JUMP_HEIGHT - ABILITY_RADIUS;
+        float heightFraction = new Random(seed ^ 0x8E75A42C39D01B6FL
+                ^ ((long) Float.floatToIntBits(x) << 1) ^ type.ordinal()).nextFloat();
+        float height = PLAYER_HEIGHT / 2f
+                + heightFraction * (JUMP_HEIGHT - PLAYER_HEIGHT / 2f);
+        return ground - height - ABILITY_RADIUS;
+    }
+
+    private AbilityIcon activeIcon(AbilityType type) {
+        for (AbilityIcon icon : abilityIcons) if (icon.type == type) return icon;
+        return null;
+    }
+
+    private boolean hasAbility(AbilityType type) {
+        return type == AbilityType.DOUBLE_JUMP ? doubleJumpEnabled : shootingEnabled;
+    }
+
     private boolean validStarAnchor(float x) {
         return platformAt(x) == null;
     }
@@ -716,11 +842,24 @@ public final class RunnerEngine {
         if (mode == Mode.RUNNING && isStanding()) {
             velocityY = JUMP_VELOCITY;
             controlledJumpInProgress = true;
+            secondJumpUsed = false;
             if (waitingForJump || terrainSpeedMultiplier < 0f) {
                 waitingForJump = false;
                 terrainSpeedMultiplier = 1f;
             }
+        } else if (mode == Mode.RUNNING && doubleJumpEnabled
+                && controlledJumpInProgress && !secondJumpUsed) {
+            velocityY = JUMP_VELOCITY;
+            secondJumpUsed = true;
         }
+    }
+
+    /** Fires at the motorcycle's current height; subsequent jumps do not steer the shot. */
+    public boolean shoot() {
+        if (mode != Mode.RUNNING || !shootingEnabled) return false;
+        playerShots.add(new PlayerShot(playerX + PLAYER_WIDTH + PLAYER_SHOT_RADIUS,
+                playerY + PLAYER_HEIGHT * .48f));
+        return true;
     }
 
     private boolean wasDefeated(float enemyX) {
@@ -764,6 +903,8 @@ public final class RunnerEngine {
             return;
         }
         if (mode != Mode.RUNNING || seconds <= 0f) return;
+
+        doubleJumpHintSeconds = Math.max(0f, doubleJumpHintSeconds - seconds);
 
         float remaining = Math.min(seconds, .05f);
         while (remaining > .000001f) {
@@ -854,6 +995,7 @@ public final class RunnerEngine {
             return true;
         }
         updateMovingEnemies(dt);
+        updatePlayerShots(dt);
         for (int i = 0; i < antagonists.size(); i++) {
             Antagonist antagonist = antagonists.get(i);
             if (antagonist.x > playerX + PLAYER_WIDTH) break;
@@ -872,15 +1014,21 @@ public final class RunnerEngine {
         }
         if (updateProjectiles(dt)) return true;
         collectStars();
+        collectAbilities();
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
     }
 
     private void defeatEnemy(int index, boolean withoutDamage) {
-        Antagonist enemy = antagonists.remove(index);
-        defeatedAntagonists.add(enemy.spawnX);
+        Antagonist enemy = antagonists.get(index);
         int bonus = enemy.type == EnemyType.MOVING
                 ? (withoutDamage ? 400 : 200) : (withoutDamage ? 300 : 100);
+        defeatEnemy(index, bonus);
+    }
+
+    private void defeatEnemy(int index, int bonus) {
+        Antagonist enemy = antagonists.remove(index);
+        defeatedAntagonists.add(enemy.spawnX);
         bonusPoints += bonus;
         bonusPopups.add(new BonusPopup(enemy.x + PLAYER_WIDTH / 2f,
                 enemy.y, bonus, enemy.type, BONUS_POPUP_SECONDS));
@@ -957,8 +1105,10 @@ public final class RunnerEngine {
             waterVerticalSpeed = 0f;
         }
         updateMovingEnemies(dt);
+        updatePlayerShots(dt);
         if (updateProjectiles(dt)) return true;
         collectStars();
+        collectAbilities();
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
     }
@@ -979,6 +1129,35 @@ public final class RunnerEngine {
             bonusPopups.add(new BonusPopup(star.x, star.y, star.color,
                     BONUS_POPUP_SECONDS));
             starBursts.add(new StarBurst(star.x, star.y, star.color, STAR_BURST_SECONDS));
+        }
+    }
+
+    private void collectAbilities() {
+        for (int i = abilityIcons.size() - 1; i >= 0; i--) {
+            AbilityIcon icon = abilityIcons.get(i);
+            if (playerX - icon.x > visibleWorldWidth) {
+                abilityIcons.remove(i);
+                float next = Math.max(farthestX, icon.x) + ABILITY_REAPPEAR_DISTANCE;
+                if (icon.type == AbilityType.DOUBLE_JUMP) nextDoubleJumpX = next;
+                else nextShootingX = next;
+                continue;
+            }
+            float nearX = Math.max(playerX, Math.min(icon.x, playerX + PLAYER_WIDTH));
+            float nearY = Math.max(playerY, Math.min(icon.y, playerY + PLAYER_HEIGHT));
+            float dx = icon.x - nearX;
+            float dy = icon.y - nearY;
+            if (dx * dx + dy * dy > ABILITY_RADIUS * ABILITY_RADIUS) continue;
+            abilityIcons.remove(i);
+            if (icon.type == AbilityType.DOUBLE_JUMP) {
+                doubleJumpEnabled = true;
+                if (!doubleJumpHintShown) {
+                    doubleJumpHintShown = true;
+                    doubleJumpHintSeconds = 2f;
+                }
+            } else {
+                shootingEnabled = true;
+            }
+            abilityDamagePoints = 0;
         }
     }
 
@@ -1235,12 +1414,62 @@ public final class RunnerEngine {
     private boolean takeDamage(int points, boolean ignoreRecovery) {
         if (!ignoreRecovery && damageRecoverySeconds > 0f) return false;
         health -= points;
+        if (doubleJumpEnabled || shootingEnabled) {
+            abilityDamagePoints += points;
+            if (abilityDamagePoints >= 2) {
+                abilityDamagePoints -= 2;
+                if (shootingEnabled) {
+                    shootingEnabled = false;
+                    nextShootingX = Math.max(START_X + 1500f * WORLD_UNITS_PER_METER,
+                            Math.max(farthestX, playerX) + ABILITY_REAPPEAR_DISTANCE);
+                } else {
+                    doubleJumpEnabled = false;
+                    nextDoubleJumpX = Math.max(START_X + 1000f * WORLD_UNITS_PER_METER,
+                            Math.max(farthestX, playerX) + ABILITY_REAPPEAR_DISTANCE);
+                }
+                if (!shootingEnabled && !doubleJumpEnabled) abilityDamagePoints = 0;
+            }
+        }
         if (health <= 0) {
             loseLife();
             return true;
         }
         damageRecoverySeconds = DAMAGE_RECOVERY_SECONDS;
         return false;
+    }
+
+    private void updatePlayerShots(float dt) {
+        for (int i = playerShots.size() - 1; i >= 0; i--) {
+            PlayerShot shot = playerShots.get(i);
+            float end = shot.x + PLAYER_SHOT_SPEED * dt;
+            boolean consumed = false;
+            // Small steps catch thin faces and a moving enemy without tunneling.
+            while (shot.x < end && !consumed) {
+                shot.x = Math.min(end, shot.x + PLAYER_SHOT_RADIUS);
+                if (touchesTerrain(shot.x, shot.y, PLAYER_SHOT_RADIUS)) {
+                    consumed = true;
+                    break;
+                }
+                for (int enemyIndex = 0; enemyIndex < antagonists.size(); enemyIndex++) {
+                    Antagonist enemy = antagonists.get(enemyIndex);
+                    if (enemy.spawnX - ENEMY_PATROL_RANGE > shot.x + PLAYER_SHOT_RADIUS) break;
+                    float nearX = Math.max(enemy.x,
+                            Math.min(shot.x, enemy.x + PLAYER_WIDTH));
+                    float nearY = Math.max(enemy.y,
+                            Math.min(shot.y, enemy.y + PLAYER_HEIGHT));
+                    float dx = shot.x - nearX;
+                    float dy = shot.y - nearY;
+                    if (dx * dx + dy * dy <= PLAYER_SHOT_RADIUS * PLAYER_SHOT_RADIUS) {
+                        defeatEnemy(enemyIndex, enemy.type == EnemyType.MOVING ? 600 : 500);
+                        consumed = true;
+                        break;
+                    }
+                }
+            }
+            if (consumed || shot.x > playerX + visibleWorldWidth + 100f) {
+                playerShots.remove(i);
+            }
+        }
     }
 
     private boolean updateProjectiles(float dt) {
@@ -1261,7 +1490,7 @@ public final class RunnerEngine {
             Projectile shot = projectiles.get(i);
             shot.x += shot.vx * dt;
             shot.y += shot.vy * dt;
-            if (touchesTerrain(shot)) {
+            if (touchesTerrain(shot.x, shot.y, PROJECTILE_RADIUS)) {
                 projectiles.remove(i);
                 continue;
             }
@@ -1281,23 +1510,22 @@ public final class RunnerEngine {
         return false;
     }
 
-    private boolean touchesTerrain(Projectile shot) {
+    private boolean touchesTerrain(float x, float y, float radius) {
         for (Platform platform : platforms) {
-            if (platform.x > shot.x + PROJECTILE_RADIUS) break;
-            float nearestX = Math.max(platform.x, Math.min(shot.x, platform.end()));
-            float nearestY = Math.max(platform.top, Math.min(shot.y, platform.bottom));
-            float dx = shot.x - nearestX;
-            float dy = shot.y - nearestY;
-            if (dx * dx + dy * dy <= PROJECTILE_RADIUS * PROJECTILE_RADIUS) return true;
+            if (platform.x > x + radius) break;
+            float nearestX = Math.max(platform.x, Math.min(x, platform.end()));
+            float nearestY = Math.max(platform.top, Math.min(y, platform.bottom));
+            float dx = x - nearestX;
+            float dy = y - nearestY;
+            if (dx * dx + dy * dy <= radius * radius) return true;
         }
-        if (shot.y + PROJECTILE_RADIUS < GROUND_Y - MAX_TERRAIN_HEIGHT) return false;
+        if (y + radius < GROUND_Y - MAX_TERRAIN_HEIGHT) return false;
         // Check the circular footprint against the same surfaces used for movement.
         // The outer samples also catch a vertical face before the dot's center crosses it.
         for (int sample = -2; sample <= 2; sample++) {
-            float offset = sample * PROJECTILE_RADIUS / 2f;
-            float surface = surfaceYAt(shot.x + offset);
-            float bottom = shot.y + (float) Math.sqrt(
-                    PROJECTILE_RADIUS * PROJECTILE_RADIUS - offset * offset);
+            float offset = sample * radius / 2f;
+            float surface = surfaceYAt(x + offset);
+            float bottom = y + (float) Math.sqrt(radius * radius - offset * offset);
             if (!Float.isNaN(surface) && bottom >= surface) return true;
         }
         return false;
@@ -1308,6 +1536,7 @@ public final class RunnerEngine {
         velocityY = 0f;
         if (controlledJumpInProgress) firstJumpCompleted = true;
         controlledJumpInProgress = false;
+        secondJumpUsed = false;
     }
 
     // The scenery uses the same terrain surface as movement to plant its roots.
@@ -1376,6 +1605,7 @@ public final class RunnerEngine {
         lives--;
         controlledJumpInProgress = false;
         projectiles.clear();
+        playerShots.clear();
         lifeLossRemainingSeconds = LIFE_LOSS_SECONDS;
         mode = Mode.LIFE_LOSS;
         if (lives == 0) {
@@ -1516,7 +1746,7 @@ public final class RunnerEngine {
         playerY = y;
         velocityY = vy;
         firstJumpCompleted = savedFirstJumpCompleted;
-        controlledJumpInProgress = savedJumpInProgress && !firstJumpCompleted;
+        controlledJumpInProgress = savedJumpInProgress;
         health = Math.max(0, Math.min(MAX_HEALTH, savedHealth));
         damageRecoverySeconds = Math.max(0f, savedDamageRecovery);
         countdownSeconds = remainingSeconds;
@@ -1668,6 +1898,65 @@ public final class RunnerEngine {
         }
     }
     public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
+    public List<AbilityIcon> getAbilityIcons() {
+        return Collections.unmodifiableList(abilityIcons);
+    }
+    public List<PlayerShot> getPlayerShots() {
+        return Collections.unmodifiableList(playerShots);
+    }
+    public boolean hasDoubleJump() { return doubleJumpEnabled; }
+    public boolean hasShooting() { return shootingEnabled; }
+    public boolean hasUsedSecondJump() { return secondJumpUsed; }
+    public float getDoubleJumpHintSeconds() { return doubleJumpHintSeconds; }
+    public float[] getAbilityState() {
+        AbilityIcon jumpIcon = activeIcon(AbilityType.DOUBLE_JUMP);
+        AbilityIcon shootIcon = activeIcon(AbilityType.SHOOTING);
+        float[] state = new float[12 + playerShots.size() * 2];
+        state[0] = doubleJumpEnabled ? 1f : 0f;
+        state[1] = shootingEnabled ? 1f : 0f;
+        state[2] = secondJumpUsed ? 1f : 0f;
+        state[3] = abilityDamagePoints;
+        state[4] = doubleJumpHintShown ? 1f : 0f;
+        state[5] = doubleJumpHintSeconds;
+        state[6] = nextDoubleJumpX;
+        state[7] = nextShootingX;
+        state[8] = jumpIcon == null ? Float.NaN : jumpIcon.x;
+        state[9] = jumpIcon == null ? Float.NaN : jumpIcon.y;
+        state[10] = shootIcon == null ? Float.NaN : shootIcon.x;
+        state[11] = shootIcon == null ? Float.NaN : shootIcon.y;
+        for (int i = 0; i < playerShots.size(); i++) {
+            state[12 + 2 * i] = playerShots.get(i).x;
+            state[13 + 2 * i] = playerShots.get(i).y;
+        }
+        return state;
+    }
+    public void restoreAbilityState(float[] state) {
+        if (state == null || state.length < 12) return; // Older saves have no abilities.
+        doubleJumpEnabled = state[0] == 1f;
+        shootingEnabled = state[1] == 1f;
+        secondJumpUsed = doubleJumpEnabled && controlledJumpInProgress && state[2] == 1f;
+        abilityDamagePoints = Math.max(0, Math.min(1, (int) state[3]));
+        doubleJumpHintShown = state[4] == 1f;
+        doubleJumpHintSeconds = doubleJumpHintShown && doubleJumpEnabled
+                && Float.isFinite(state[5]) ? Math.max(0f, Math.min(2f, state[5])) : 0f;
+        nextDoubleJumpX = Float.isFinite(state[6]) ? Math.max(START_X + 10000f, state[6])
+                : START_X + 10000f;
+        nextShootingX = Float.isFinite(state[7]) ? Math.max(START_X + 15000f, state[7])
+                : START_X + 15000f;
+        abilityIcons.clear();
+        if (!doubleJumpEnabled && Float.isFinite(state[8]) && Float.isFinite(state[9])) {
+            abilityIcons.add(new AbilityIcon(state[8], state[9], AbilityType.DOUBLE_JUMP));
+        }
+        if (!shootingEnabled && Float.isFinite(state[10]) && Float.isFinite(state[11])) {
+            abilityIcons.add(new AbilityIcon(state[10], state[11], AbilityType.SHOOTING));
+        }
+        playerShots.clear();
+        for (int i = 12; i + 1 < state.length; i += 2) {
+            if (Float.isFinite(state[i]) && Float.isFinite(state[i + 1])) {
+                playerShots.add(new PlayerShot(state[i], state[i + 1]));
+            }
+        }
+    }
     public List<BonusPopup> getBonusPopups() { return Collections.unmodifiableList(bonusPopups); }
     public float[] getDefeatedAntagonists() {
         float[] state = new float[defeatedAntagonists.size()];
