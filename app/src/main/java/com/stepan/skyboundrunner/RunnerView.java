@@ -28,6 +28,8 @@ public final class RunnerView extends View {
     private static final int PALM_TRUNK = Color.rgb(77, 122, 140);
     private static final int PALM_LEAF = Color.rgb(55, 151, 143);
     private static final int PALM_LEAF_SHADE = Color.rgb(48, 137, 135);
+    private static final int GRASS_BASE = Color.rgb(77, 165, 92);
+    private static final int GRASS_TIPS = Color.rgb(64, 154, 85);
     private static final float[][] FROND_SPREAD = {
             {-56f, -45f, -28f, 27f, 44f, 56f},
             {-59f, -40f, -21f, 26f, 39f, 53f},
@@ -62,6 +64,7 @@ public final class RunnerView extends View {
     private final Path turretPath = new Path();
     private final Path carPath = new Path();
     private final Path palmPath = new Path();
+    private final Path grassPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
@@ -253,6 +256,7 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
+        drawGrass(canvas, cameraX, right);
         for (RunnerEngine.Antagonist antagonist : engine.getAntagonists()) {
             if (antagonist.x + RunnerEngine.PLAYER_WIDTH < cameraX) continue;
             if (antagonist.x > right) break;
@@ -270,6 +274,37 @@ public final class RunnerView extends View {
         }
         drawHovercar(canvas);
         canvas.restore();
+    }
+
+    private void drawGrass(Canvas canvas, float left, float right) {
+        paint.setStyle(Paint.Style.FILL);
+        for (SceneryLayout.GrassSegment segment :
+                SceneryLayout.visibleGrass(engine.getHazards(), left, right)) {
+            // The narrow base joins the blades continuously along flat and
+            // gentle terrain, but never bridges a hole or a steep slope.
+            grassPath.rewind();
+            grassPath.moveTo(segment.fromX, segment.fromY);
+            grassPath.lineTo(segment.toX, segment.toY);
+            grassPath.lineTo(segment.toX, segment.toY - 2f);
+            grassPath.lineTo(segment.fromX, segment.fromY - 2f);
+            grassPath.close();
+            paint.setColor(GRASS_BASE);
+            canvas.drawPath(grassPath, paint);
+
+            paint.setColor(GRASS_TIPS);
+            for (float x = (float) Math.ceil(segment.fromX / 7f) * 7f;
+                    x < segment.toX; x += 7f) {
+                float bladeLeft = Math.max(segment.fromX, x - 2.5f);
+                float bladeRight = Math.min(segment.toX, x + 2.5f);
+                if (bladeRight <= bladeLeft) continue;
+                grassPath.rewind();
+                grassPath.moveTo(bladeLeft, segment.surfaceYAt(bladeLeft) - 2f);
+                grassPath.lineTo(x, segment.surfaceYAt(x) - SceneryLayout.GRASS_HEIGHT);
+                grassPath.lineTo(bladeRight, segment.surfaceYAt(bladeRight) - 2f);
+                grassPath.close();
+                canvas.drawPath(grassPath, paint);
+            }
+        }
     }
 
     private void drawHovercar(Canvas canvas) {

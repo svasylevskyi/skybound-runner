@@ -108,14 +108,12 @@ public final class RunnerEngineChecks {
                 float step = SceneryLayout.palmStep(width);
                 for (int frame = 0; frame < 400; frame++) {
                     float left = frame * width / 9f * SceneryLayout.PALM_SCROLL;
-                    int centers = 0;
                     int visible = 0;
                     for (int index = SceneryLayout.firstIndex(left, step);
                             index <= SceneryLayout.lastIndex(left + width, step); index++) {
                         float x = SceneryLayout.groundedPalmX(seed, index, width,
                                 course.getHazards());
                         movedPalmAwayFromHole |= x != SceneryLayout.palmX(seed, index, width);
-                        if (x >= left && x < left + width) centers++;
                         if (x + SceneryLayout.PALM_EXTENT >= left
                                 && x - SceneryLayout.PALM_EXTENT <= left + width) visible++;
                         check(x == SceneryLayout.groundedPalmX(seed, index, width,
@@ -135,8 +133,8 @@ public final class RunnerEngineChecks {
                                         && !Float.isNaN(course.surfaceYAt(x + halfRoot)),
                                 "palm trunk is supported by terrain");
                     }
-                    check(centers >= 1 && visible <= 5,
-                            "each scrolling screen contains one to five palm trees");
+                    check(visible >= 3 && visible <= 8,
+                            "each scrolling screen contains three to eight palm trees");
                 }
             }
             for (int index = -20; index < 200; index++) {
@@ -163,6 +161,68 @@ public final class RunnerEngineChecks {
                         && SceneryLayout.palmTrunkWidth(0) != SceneryLayout.palmTrunkWidth(1),
                 "the five palm shapes vary in height by at most five pixels and in trunk width");
         check(movedPalmAwayFromHole, "hole avoidance is exercised by a generated course");
+    }
+
+    private static SceneryLayout.GrassSegment grassAt(
+            java.util.List<SceneryLayout.GrassSegment> segments, float x) {
+        for (SceneryLayout.GrassSegment segment : segments) {
+            if (segment.fromX <= x && x < segment.toX) return segment;
+        }
+        return null;
+    }
+
+    private static void testGrassCoverage() {
+        check(SceneryLayout.GRASS_HEIGHT == RunnerEngine.PLAYER_HEIGHT / 4f,
+                "grass blades are one quarter of the hovercar height");
+        boolean sawHole = false;
+        boolean sawGentle = false;
+        boolean sawSteep = false;
+        boolean sawWall = false;
+        boolean sawDip = false;
+        for (long seed = 0; seed < 40; seed++) {
+            RunnerEngine course = new RunnerEngine();
+            course.startNewGame(seed);
+            course.generateAhead(20_000f);
+            for (RunnerEngine.Hazard hazard : course.getHazards()) {
+                java.util.List<SceneryLayout.GrassSegment> grass =
+                        SceneryLayout.visibleGrass(course.getHazards(),
+                                hazard.x - 20f, hazard.end() + 20f);
+                check(grassAt(grass, hazard.x - 10f) != null
+                                && grassAt(grass, hazard.end() + 10f) != null,
+                        "grass resumes on flat ground beside obstacles");
+                if (hazard.type == RunnerEngine.HazardType.HOLE) {
+                    sawHole = true;
+                    check(grassAt(grass, (hazard.x + hazard.end()) / 2f) == null,
+                            "grass does not bridge holes");
+                    continue;
+                }
+                sawWall |= hazard.type == RunnerEngine.HazardType.WALL;
+                sawDip |= hazard.type == RunnerEngine.HazardType.DIP;
+                float flatMiddle = (hazard.flatStart + hazard.flatEnd) / 2f;
+                check(grassAt(grass, flatMiddle) != null,
+                        "grass covers raised ledges and depression floors");
+                for (int side = 0; side < 2; side++) {
+                    int degrees = side == 0 ? hazard.entranceDegrees : hazard.exitDegrees;
+                    float from = side == 0 ? hazard.x : hazard.flatEnd;
+                    float to = side == 0 ? hazard.flatStart : hazard.end();
+                    if (to - from < .5f) continue;
+                    float middle = (from + to) / 2f;
+                    SceneryLayout.GrassSegment segment = grassAt(grass, middle);
+                    if (degrees > 45) {
+                        sawSteep = true;
+                        check(segment == null, "grass stops on slopes over 45 degrees");
+                    } else {
+                        sawGentle = true;
+                        check(segment != null
+                                        && Math.abs(segment.surfaceYAt(middle)
+                                        - hazard.surfaceYAt(middle)) < .1f,
+                                "grass follows gentle slopes at the terrain surface");
+                    }
+                }
+            }
+        }
+        check(sawHole && sawGentle && sawSteep && sawWall && sawDip,
+                "grass rules cover holes, both terrain types, and both incline ranges");
     }
 
     private static float horizontalRun(float height, int degrees) {
@@ -1540,6 +1600,7 @@ public final class RunnerEngineChecks {
     public static void main(String[] args) {
         testLayout();
         testSceneryLayout();
+        testGrassCoverage();
         testFirstJumpHint();
         testSlopes();
         testHovercarJumpPitch();

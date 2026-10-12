@@ -1,5 +1,6 @@
 package com.stepan.skyboundrunner;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Stateless, seeded positions for the scenery; no save data is needed. */
@@ -9,10 +10,29 @@ final class SceneryLayout {
     static final float NEAR_SCROLL = .39f;
     static final float PALM_SCROLL = 1f; // Roots must scroll with the terrain.
     static final float PALM_EXTENT = 70f;
+    static final float GRASS_HEIGHT = RunnerEngine.PLAYER_HEIGHT / 4f;
     private static final float HOLE_CLEARANCE = PALM_EXTENT + 2f;
     private static final float[] PALM_HEIGHTS = {111f, 112f, 113f, 114f, 116f};
     private static final float[] PALM_TRUNKS = {5f, 6.5f, 4.5f, 7f, 5.5f};
     private static final float[] PALM_LEANS = {-7f, 8f, -3f, 10f, 0f};
+
+    static final class GrassSegment {
+        final float fromX;
+        final float toX;
+        final float fromY;
+        final float toY;
+
+        private GrassSegment(float fromX, float toX, float fromY, float toY) {
+            this.fromX = fromX;
+            this.toX = toX;
+            this.fromY = fromY;
+            this.toY = toY;
+        }
+
+        float surfaceYAt(float x) {
+            return fromY + (toY - fromY) * (x - fromX) / (toX - fromX);
+        }
+    }
 
     private SceneryLayout() { }
 
@@ -25,7 +45,48 @@ final class SceneryLayout {
     }
 
     static float palmStep(float screenWidth) {
-        return screenWidth * .54f;
+        return screenWidth * .23f;
+    }
+
+    static List<GrassSegment> visibleGrass(List<RunnerEngine.Hazard> hazards,
+                                           float left, float right) {
+        List<GrassSegment> grass = new ArrayList<>();
+        float cursor = left;
+        for (RunnerEngine.Hazard hazard : hazards) {
+            if (hazard.end() <= left) continue;
+            if (hazard.x >= right) break;
+            addGrass(grass, cursor, hazard.x, RunnerEngine.GROUND_Y,
+                    RunnerEngine.GROUND_Y, left, right);
+            if (hazard.type != RunnerEngine.HazardType.HOLE) {
+                float flatY = RunnerEngine.GROUND_Y
+                        + (hazard.type == RunnerEngine.HazardType.WALL
+                        ? -hazard.height : hazard.height);
+                if (hazard.entranceDegrees <= 45) {
+                    addGrass(grass, hazard.x, hazard.flatStart,
+                            RunnerEngine.GROUND_Y, flatY, left, right);
+                }
+                addGrass(grass, hazard.flatStart, hazard.flatEnd,
+                        flatY, flatY, left, right);
+                if (hazard.exitDegrees <= 45) {
+                    addGrass(grass, hazard.flatEnd, hazard.end(),
+                            flatY, RunnerEngine.GROUND_Y, left, right);
+                }
+            }
+            cursor = Math.max(cursor, hazard.end());
+        }
+        addGrass(grass, cursor, right, RunnerEngine.GROUND_Y,
+                RunnerEngine.GROUND_Y, left, right);
+        return grass;
+    }
+
+    private static void addGrass(List<GrassSegment> grass, float start, float end,
+                                 float startY, float endY, float left, float right) {
+        float from = Math.max(start, left);
+        float to = Math.min(end, right);
+        if (to <= from) return;
+        float fromY = startY + (endY - startY) * (from - start) / (end - start);
+        float toY = startY + (endY - startY) * (to - start) / (end - start);
+        grass.add(new GrassSegment(from, to, fromY, toY));
     }
 
     static float palmX(long seed, int index, float screenWidth) {
