@@ -16,6 +16,7 @@ public final class RunnerEngine {
     public static final int MAX_HEALTH = 10;
     public static final int MAX_LIVES = 5;
     public static final float PROJECTILE_RADIUS = 6f;
+    public static final float PLATFORM_THICKNESS = 10f;
     // Muzzle position relative to the enemy's 32 x 46 collision bounds.
     public static final float MUZZLE_X = -2f;
     public static final float MUZZLE_Y = PLAYER_HEIGHT / 2f;
@@ -107,9 +108,27 @@ public final class RunnerEngine {
         }
     }
 
+    /** A solid overhead surface; ground remains intact beneath it. */
+    public static final class Platform {
+        public final float x;
+        public final float width;
+        public final float top;
+        public final float bottom;
+
+        private Platform(float x, float width, float clearance) {
+            this.x = x;
+            this.width = width;
+            bottom = GROUND_Y - clearance;
+            top = bottom - PLATFORM_THICKNESS;
+        }
+
+        public float end() { return x + width; }
+    }
+
     public static final class Antagonist {
         public final float spawnX;
         public final EnemyType type;
+        public final Platform platform;
         public float x;
         public float y;
         private float shotTimer = .75f;
@@ -120,9 +139,10 @@ public final class RunnerEngine {
         private int direction;
         private int behaviorStep;
 
-        private Antagonist(float x, float y, EnemyType type) {
+        private Antagonist(float x, float y, EnemyType type, Platform platform) {
             this.spawnX = x;
             this.type = type;
+            this.platform = platform;
             this.x = x;
             this.y = y;
         }
@@ -168,11 +188,13 @@ public final class RunnerEngine {
     }
 
     private final List<Hazard> hazards = new ArrayList<>();
+    private final List<Platform> platforms = new ArrayList<>();
     private final List<Antagonist> antagonists = new ArrayList<>();
     private final List<Float> defeatedAntagonists = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
     private final List<BonusPopup> bonusPopups = new ArrayList<>();
     private Random random;
+    private Random platformRandom;
     private Random antagonistRandom;
     private float nextHazardX;
     private float nextAntagonistX;
@@ -210,8 +232,10 @@ public final class RunnerEngine {
     private void resetCourse(long courseSeed) {
         seed = courseSeed;
         random = new Random(seed);
+        platformRandom = new Random(seed ^ 0xC2B2AE3D27D4EB4FL);
         antagonistRandom = new Random(seed ^ 0x6A09E667F3BCC909L);
         hazards.clear();
+        platforms.clear();
         antagonists.clear();
         defeatedAntagonists.clear();
         projectiles.clear();
@@ -255,6 +279,24 @@ public final class RunnerEngine {
             hazards.add(hazard);
             // Clear ground between hazards leaves time for a fresh jump.
             nextHazardX = hazard.end() + 290f + random.nextInt(125);
+            // Platforms occupy their own flat-ground intervals. A higher
+            // platform is preceded by a lower one within jumping distance.
+            float platformRoll = platformRandom.nextFloat();
+            if (platformRoll < .28f) {
+                float x = hazard.end() + 160f;
+                Platform lower = new Platform(x, 380f + platformRandom.nextInt(51),
+                        PLAYER_HEIGHT * (2f + platformRandom.nextFloat() * .12f));
+                platforms.add(lower);
+                float lastEnd = lower.end();
+                if (platformRoll < .10f) {
+                    Platform higher = new Platform(lastEnd + 36f,
+                            380f + platformRandom.nextInt(51),
+                            PLAYER_HEIGHT * (2.7f + platformRandom.nextFloat() * 1.3f));
+                    platforms.add(higher);
+                    lastEnd = higher.end();
+                }
+                nextHazardX = lastEnd + 440f;
+            }
         }
         if (getCourseDistance() < 500) return;
         while (nextAntagonistX < worldX) {
@@ -266,9 +308,12 @@ public final class RunnerEngine {
                     && new Random(seed ^ 0xA0761D6478BD642FL
                     ^ ((long) Float.floatToIntBits(x) * 0xE7037ED1A0B428DBL)).nextBoolean()
                     ? EnemyType.MOVING : EnemyType.STATIONARY;
-            float center = surfaceYAt(x + PLAYER_WIDTH / 2f);
+            Platform platform = platformForEnemy(x, type);
+            float center = platform == null ? surfaceYAt(x + PLAYER_WIDTH / 2f)
+                    : platform.top;
             if (!wasDefeated(x) && !Float.isNaN(center) && canSpawnAt(x, type)) {
-                Antagonist antagonist = new Antagonist(x, center - PLAYER_HEIGHT, type);
+                Antagonist antagonist = new Antagonist(x, center - PLAYER_HEIGHT,
+                        type, platform);
                 if (type == EnemyType.MOVING) {
                     antagonist.directionTimer = .35f + nextEnemyRandom(antagonist) * .9f;
                     antagonist.jumpTimer = .25f + nextEnemyRandom(antagonist) * 1.25f;
@@ -281,6 +326,20 @@ public final class RunnerEngine {
                     visibleWorldWidth + PLAYER_WIDTH + 2f * ENEMY_PATROL_RANGE + 20f)
                     + antagonistRandom.nextInt(1200);
         }
+    }
+
+    private Platform platformForEnemy(float x, EnemyType type) {
+        float patrol = type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
+        float left = x - patrol;
+        float right = x + PLAYER_WIDTH + patrol;
+        for (Platform platform : platforms) {
+            if (platform.x > left) break;
+            if (left >= platform.x + ENEMY_TERRAIN_CLEARANCE
+                    && right <= platform.end() - ENEMY_TERRAIN_CLEARANCE) {
+                return platform;
+            }
+        }
+        return null;
     }
 
     private boolean canSpawnAt(float x, EnemyType type) {
@@ -382,11 +441,23 @@ public final class RunnerEngine {
         velocityY += GRAVITY * pace * dt;
         stopAtVerticalFace(oldX, wasStanding);
         if (!waitingForJump && wasStanding) stopAtSlopeFoot(oldX);
+        bumpPlatformUnderside(oldFeet);
 
         // A jump can land on the near edge before the runner's center reaches it.
         boolean landed = false;
         float feet = playerY + PLAYER_HEIGHT;
         if (velocityY >= 0f) {
+            for (Platform platform : platforms) {
+                if (platform.x > playerX + PLAYER_WIDTH) break;
+                if (playerX < platform.end() && playerX + PLAYER_WIDTH > platform.x
+                        && oldFeet <= platform.top + 1f && feet >= platform.top) {
+                    landAt(platform.top);
+                    landed = true;
+                    break;
+                }
+            }
+        }
+        if (!landed && velocityY >= 0f) {
             for (Hazard hazard : hazards) {
                 float top = GROUND_Y - hazard.height;
                 if (hazard.type == HazardType.WALL
@@ -426,6 +497,7 @@ public final class RunnerEngine {
                 }
             }
         }
+        stopAtPlatformEdge(oldX);
         farthestX = Math.max(farthestX, playerX);
         if (playerY + PLAYER_HEIGHT > GROUND_Y + MAX_TERRAIN_HEIGHT + 17f) {
             loseLife();
@@ -456,6 +528,36 @@ public final class RunnerEngine {
         if (updateProjectiles(dt)) return true;
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
+    }
+
+    private void bumpPlatformUnderside(float oldFeet) {
+        float oldHead = oldFeet - PLAYER_HEIGHT;
+        if (playerY >= oldHead) return;
+        for (Platform platform : platforms) {
+            if (platform.x >= playerX + PLAYER_WIDTH) break;
+            if (playerX < platform.end() && oldHead >= platform.bottom - .5f
+                    && playerY <= platform.bottom && oldFeet > platform.top + 1f) {
+                playerY = platform.bottom;
+                velocityY = 0f;
+                return;
+            }
+        }
+    }
+
+    private void stopAtPlatformEdge(float oldX) {
+        if (playerX <= oldX) return;
+        for (Platform platform : platforms) {
+            if (platform.x > playerX + PLAYER_WIDTH) break;
+            if (oldX + PLAYER_WIDTH <= platform.x
+                    && playerX + PLAYER_WIDTH > platform.x
+                    && playerY < platform.bottom
+                    && playerY + PLAYER_HEIGHT > platform.top) {
+                // A late approach touches the edge until the car rises above
+                // the top or falls low enough to pass beneath it.
+                playerX = platform.x - PLAYER_WIDTH;
+                return;
+            }
+        }
     }
 
     private boolean landOnCrossedRisingSlope(float oldX, float oldFeet, float newFeet) {
@@ -567,7 +669,7 @@ public final class RunnerEngine {
             }
             float nextX = antagonist.x + antagonist.direction * ENEMY_PATROL_SPEED * dt;
             if (Math.abs(nextX - antagonist.spawnX) <= ENEMY_PATROL_RANGE
-                    && canStandAt(nextX)) {
+                    && canStandAt(nextX, antagonist.platform)) {
                 antagonist.x = nextX;
             } else {
                 antagonist.direction = -antagonist.direction;
@@ -586,9 +688,18 @@ public final class RunnerEngine {
                     antagonist.jumpVelocity = 0f;
                 }
             }
-            antagonist.y = surfaceYAt(antagonist.x + PLAYER_WIDTH / 2f)
+            antagonist.y = supportYAt(antagonist.x, antagonist.platform)
                     - PLAYER_HEIGHT + antagonist.jumpOffset;
         }
+    }
+
+    private float supportYAt(float x, Platform platform) {
+        return platform == null ? surfaceYAt(x + PLAYER_WIDTH / 2f) : platform.top;
+    }
+
+    private boolean canStandAt(float x, Platform platform) {
+        return platform == null ? canStandAt(x)
+                : x >= platform.x && x + PLAYER_WIDTH <= platform.end();
     }
 
     private boolean canStandAt(float x) {
@@ -657,6 +768,14 @@ public final class RunnerEngine {
     }
 
     private boolean touchesTerrain(Projectile shot) {
+        for (Platform platform : platforms) {
+            if (platform.x > shot.x + PROJECTILE_RADIUS) break;
+            float nearestX = Math.max(platform.x, Math.min(shot.x, platform.end()));
+            float nearestY = Math.max(platform.top, Math.min(shot.y, platform.bottom));
+            float dx = shot.x - nearestX;
+            float dy = shot.y - nearestY;
+            if (dx * dx + dy * dy <= PROJECTILE_RADIUS * PROJECTILE_RADIUS) return true;
+        }
         if (shot.y + PROJECTILE_RADIUS < GROUND_Y - MAX_TERRAIN_HEIGHT) return false;
         // Check the circular footprint against the same surfaces used for movement.
         // The outer samples also catch a vertical face before the dot's center crosses it.
@@ -689,6 +808,11 @@ public final class RunnerEngine {
     }
 
     private float surfaceYForPlayer(float left, float feet) {
+        for (Platform platform : platforms) {
+            if (platform.x >= left + PLAYER_WIDTH) break;
+            if (left < platform.end() && feet <= platform.top + 1.2f
+                    && feet >= platform.top - 1.2f) return platform.top;
+        }
         float center = left + PLAYER_WIDTH / 2f;
         for (Hazard hazard : hazards) {
             if (hazard.type == HazardType.WALL && hazard.flatStart - hazard.x < 10f
@@ -886,7 +1010,7 @@ public final class RunnerEngine {
                     float patrol = antagonist.type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
                     float savedX = Math.max(antagonist.spawnX - patrol,
                             Math.min(antagonist.spawnX + patrol, savedEnemyState[i + 1]));
-                    if (canStandAt(savedX)) antagonist.x = savedX;
+                    if (canStandAt(savedX, antagonist.platform)) antagonist.x = savedX;
                     antagonist.shotTimer = Math.max(0f, savedEnemyState[i + 2]);
                     antagonist.direction = savedEnemyState[i + 3] < 0f ? -1 : 1;
                     antagonist.directionTimer = Math.max(0f, savedEnemyState[i + 4]);
@@ -894,7 +1018,7 @@ public final class RunnerEngine {
                     antagonist.jumpOffset = Math.max(-30f, Math.min(0f, savedEnemyState[i + 6]));
                     antagonist.jumpVelocity = savedEnemyState[i + 7];
                     antagonist.behaviorStep = Math.max(0, (int) savedEnemyState[i + 8]);
-                    antagonist.y = surfaceYAt(antagonist.x + PLAYER_WIDTH / 2f)
+                    antagonist.y = supportYAt(antagonist.x, antagonist.platform)
                             - PLAYER_HEIGHT + antagonist.jumpOffset;
                     break;
                 }
@@ -935,6 +1059,7 @@ public final class RunnerEngine {
     }
 
     public List<Hazard> getHazards() { return hazards; }
+    public List<Platform> getPlatforms() { return Collections.unmodifiableList(platforms); }
     public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
     public List<BonusPopup> getBonusPopups() { return Collections.unmodifiableList(bonusPopups); }
     public float[] getDefeatedAntagonists() {

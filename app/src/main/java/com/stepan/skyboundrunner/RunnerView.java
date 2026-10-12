@@ -257,6 +257,13 @@ public final class RunnerView extends View {
             drawTerrainShape(canvas, hazard);
         }
         drawGrass(canvas, cameraX, right);
+        paint.setColor(YELLOW);
+        paint.setStyle(Paint.Style.FILL);
+        for (RunnerEngine.Platform platform : engine.getPlatforms()) {
+            if (platform.end() <= cameraX) continue;
+            if (platform.x >= right) break;
+            canvas.drawRect(platform.x, platform.top, platform.end(), platform.bottom, paint);
+        }
         for (RunnerEngine.Antagonist antagonist : engine.getAntagonists()) {
             if (antagonist.x + RunnerEngine.PLAYER_WIDTH < cameraX) continue;
             if (antagonist.x > right) break;
