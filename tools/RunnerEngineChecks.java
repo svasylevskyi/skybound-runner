@@ -95,6 +95,43 @@ public final class RunnerEngineChecks {
                 "generation includes varied heights, gentle, moderate, steep and vertical edges");
     }
 
+    private static void testSceneryLayout() {
+        long[] seeds = {1L, 328493L, Long.MIN_VALUE, Long.MAX_VALUE};
+        float[] widths = {540f, 720f, 960f, 1170f, 1440f};
+        for (long seed : seeds) {
+            for (float width : widths) {
+                float step = SceneryLayout.palmStep(width);
+                for (int frame = 0; frame < 400; frame++) {
+                    float left = frame * width / 9f * SceneryLayout.PALM_SCROLL;
+                    int centers = 0;
+                    int visible = 0;
+                    for (int index = SceneryLayout.firstIndex(left, step);
+                            index <= SceneryLayout.lastIndex(left + width, step); index++) {
+                        float x = SceneryLayout.palmX(seed, index, width);
+                        if (x >= left && x < left + width) centers++;
+                        if (x + 70f >= left && x - 70f <= left + width) visible++;
+                        check(x == SceneryLayout.palmX(seed, index, width),
+                                "palm positions repeat for the same course");
+                    }
+                    check(centers >= 1 && visible <= 5,
+                            "each scrolling screen contains one to five palm trees");
+                }
+            }
+            for (int index = -20; index < 200; index++) {
+                for (boolean near : new boolean[]{false, true}) {
+                    float gap = SceneryLayout.BUILDING_STEP
+                            - SceneryLayout.buildingWidth(seed, index, near);
+                    check(gap >= 1f && gap <= 7f,
+                            "skyscrapers have only narrow intermittent gaps");
+                    float height = SceneryLayout.buildingHeight(seed, index, near);
+                    check(height >= (near ? 125f : 85f)
+                                    && height < (near ? 260f : 210f),
+                            "seeded skyscrapers have bounded heights");
+                }
+            }
+        }
+    }
+
     private static float horizontalRun(float height, int degrees) {
         return degrees == 90 ? 0f
                 : (float) (height / Math.tan(Math.toRadians(degrees)));
@@ -1469,6 +1506,7 @@ public final class RunnerEngineChecks {
 
     public static void main(String[] args) {
         testLayout();
+        testSceneryLayout();
         testFirstJumpHint();
         testSlopes();
         testHovercarJumpPitch();

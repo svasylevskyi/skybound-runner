@@ -19,6 +19,17 @@ public final class RunnerView extends View {
     private static final String OLD_SCORES_KEY = "completed_attempt_distances";
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
+    private static final int FAR_CITY = Color.rgb(154, 194, 217);
+    private static final int FAR_CITY_EDGE = Color.rgb(139, 183, 209);
+    private static final int FAR_WINDOWS = Color.rgb(184, 216, 230);
+    private static final int NEAR_CITY = Color.rgb(101, 158, 190);
+    private static final int NEAR_CITY_EDGE = Color.rgb(82, 138, 174);
+    private static final int NEAR_WINDOWS = Color.rgb(166, 212, 225);
+    private static final int PALM_TRUNK = Color.rgb(77, 122, 140);
+    private static final int PALM_LEAF = Color.rgb(55, 151, 143);
+    private static final int PALM_LEAF_SHADE = Color.rgb(48, 137, 135);
+    private static final float[] FROND_SPREAD = {-56f, -45f, -28f, 27f, 44f, 56f};
+    private static final float[] FROND_DROP = {16f, -8f, -24f, -23f, -7f, 17f};
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int DAMAGE_BLINK_BLUE = Color.rgb(218, 245, 255);
     private static final int CAR_GLASS = Color.rgb(91, 162, 210);
@@ -38,6 +49,7 @@ public final class RunnerView extends View {
     private final Path heartPath = new Path();
     private final Path turretPath = new Path();
     private final Path carPath = new Path();
+    private final Path palmPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
@@ -82,6 +94,7 @@ public final class RunnerView extends View {
         canvas.scale(scale, scale);
         canvas.drawColor(SKY);
         float cameraX = Math.max(0f, engine.getPlayerX() - logicalWidth * .30f);
+        drawScenery(canvas, cameraX);
         engine.generateAhead(cameraX + logicalWidth + 550f);
         drawWorld(canvas, cameraX);
         drawBonuses(canvas, cameraX);
@@ -94,6 +107,103 @@ public final class RunnerView extends View {
                 || (engine.getMode() == RunnerEngine.Mode.GAME_OVER
                 && !engine.getBonusPopups().isEmpty())) {
             postInvalidateOnAnimation();
+        }
+    }
+
+    private void drawScenery(Canvas canvas, float cameraX) {
+        long seed = engine.getSeed();
+        drawCity(canvas, cameraX * SceneryLayout.FAR_SCROLL, seed, false);
+        drawCity(canvas, cameraX * SceneryLayout.NEAR_SCROLL, seed, true);
+        drawPalms(canvas, cameraX * SceneryLayout.PALM_SCROLL, seed);
+    }
+
+    private void drawCity(Canvas canvas, float scrollX, long seed, boolean near) {
+        canvas.save();
+        canvas.translate(-scrollX, 0f);
+        paint.setStyle(Paint.Style.FILL);
+        int bodyColor = near ? NEAR_CITY : FAR_CITY;
+        int edgeColor = near ? NEAR_CITY_EDGE : FAR_CITY_EDGE;
+        int windowColor = near ? NEAR_WINDOWS : FAR_WINDOWS;
+        float step = SceneryLayout.BUILDING_STEP;
+        for (int index = SceneryLayout.firstIndex(scrollX, step);
+                index <= SceneryLayout.lastIndex(scrollX + logicalWidth, step); index++) {
+            float x = index * step;
+            float width = SceneryLayout.buildingWidth(seed, index, near);
+            float top = RunnerEngine.GROUND_Y
+                    - SceneryLayout.buildingHeight(seed, index, near);
+            paint.setColor(bodyColor);
+            canvas.drawRect(x, top, x + width, RunnerEngine.WORLD_HEIGHT, paint);
+            paint.setColor(edgeColor);
+            canvas.drawRect(x + width - 5f, top, x + width,
+                    RunnerEngine.WORLD_HEIGHT, paint);
+            // A stepped roof and occasional aerial give the dense towers a
+            // futuristic silhouette without adding sprites or animation.
+            float roof = SceneryLayout.random01(seed, index,
+                    near ? 0x753BB37C3E8B7AE1L : 0x236AB634A6FD468BL);
+            canvas.drawRect(x + 6f, top - 5f, x + width - 8f, top, paint);
+            if (roof > .83f) {
+                float aerialX = x + width * .5f;
+                canvas.drawRect(aerialX - 1f, top - 20f, aerialX + 1f, top - 5f, paint);
+            }
+            paint.setColor(windowColor);
+            for (float row = top + 17f; row < RunnerEngine.GROUND_Y - 12f; row += 23f) {
+                int rowIndex = (int) ((row - top) / 23f);
+                for (float column = x + 8f; column < x + width - 7f; column += 13f) {
+                    if (SceneryLayout.random01(seed, index + rowIndex * 31,
+                            0xE4BCB1D1793873A3L + (long) column * 17L + (near ? 1L : 0L))
+                            > .22f) {
+                        canvas.drawRect(column, row, column + 4f, row + 7f, paint);
+                    }
+                }
+            }
+        }
+        canvas.restore();
+    }
+
+    private void drawPalms(Canvas canvas, float scrollX, long seed) {
+        canvas.save();
+        canvas.translate(-scrollX, 0f);
+        paint.setStyle(Paint.Style.FILL);
+        float step = SceneryLayout.palmStep(logicalWidth);
+        for (int index = SceneryLayout.firstIndex(scrollX, step);
+                index <= SceneryLayout.lastIndex(scrollX + logicalWidth, step); index++) {
+            float x = SceneryLayout.palmX(seed, index, logicalWidth);
+            if (x < scrollX - 70f || x > scrollX + logicalWidth + 70f) continue;
+            float height = 100f + SceneryLayout.random01(seed, index,
+                    0xEC889D29980E9F4DL) * 36f;
+            float lean = (SceneryLayout.random01(seed, index,
+                    0x643B552E6162311FL) - .5f) * 28f;
+            drawPalm(canvas, x, height, lean);
+        }
+        canvas.restore();
+    }
+
+    private void drawPalm(Canvas canvas, float x, float height, float lean) {
+        float rootY = RunnerEngine.GROUND_Y + 16f;
+        float crownX = x + lean;
+        float crownY = rootY - height;
+        palmPath.rewind();
+        palmPath.moveTo(x - 3.5f, rootY);
+        palmPath.cubicTo(x - 5f, rootY - height * .36f,
+                crownX - 7f, crownY + height * .31f, crownX - 2.5f, crownY);
+        palmPath.lineTo(crownX + 2.5f, crownY);
+        palmPath.cubicTo(crownX - 1f, crownY + height * .36f,
+                x + 3f, rootY - height * .28f, x + 3.5f, rootY);
+        palmPath.close();
+        paint.setColor(PALM_TRUNK);
+        canvas.drawPath(palmPath, paint);
+        for (int i = 0; i < FROND_SPREAD.length; i++) {
+            float dx = FROND_SPREAD[i];
+            float dy = FROND_DROP[i];
+            palmPath.rewind();
+            palmPath.moveTo(crownX, crownY);
+            palmPath.quadTo(crownX + dx * .55f, crownY - 18f,
+                    crownX + dx, crownY + dy);
+            palmPath.quadTo(crownX + dx * .74f, crownY + dy - 9f,
+                    crownX + dx * .29f, crownY - 5f);
+            palmPath.close();
+            paint.setColor(i % 2 == 0 ? PALM_LEAF : PALM_LEAF_SHADE);
+            canvas.drawPath(palmPath, paint);
         }
     }
 

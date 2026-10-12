@@ -2,6 +2,8 @@
 
 A lightweight Android side scroller prototype. The dark blue hovercar moves automatically; tap anywhere while moving to jump. Raised yellow walls act as ledges, holes must be cleared, and depressions can be jumped over or escaped after landing inside. Ledges and depressions vary from 4 to 10 m high or deep, below the car's 11.1 m jump height. Flat ground is 0°; height-changing ledge and depression edges have random inclines from 1° to 90°, where 90° is vertical. Tapping Start on a fresh launch generates a new course.
 
+The background has a dense, two-layer futuristic skyline with a few small gaps between skyscrapers. Palm trees scroll in front of the buildings, with one to five visible on each screen. Both layers are generated from the course seed and remain in the same places after pausing or restoring a run.
+
 ## Playing
 
 1. Install the debug APK on an Android 6.0 (API 23) or newer device and launch **Skybound Runner**.
@@ -29,11 +31,11 @@ Each run signs the APK with a new debug key. If an older build of the game is al
 
 If you have Android SDK platform 35 and build tools 35.0.0 but no Gradle, you can also run `ANDROID_HOME=/path/to/android-sdk bash tools/build_with_sdk.sh` from this directory. This creates `SkyboundRunner-debug.apk` at the project root.
 
-The gameplay is in `app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java`, independently of Android APIs; `RunnerView.java` handles drawing and touch. The executable core checks are in `tools/RunnerEngineChecks.java` and can run with:
+The gameplay is in `app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java`, independently of Android APIs; `SceneryLayout.java` generates deterministic background geometry, and `RunnerView.java` handles drawing and touch. The executable core checks are in `tools/RunnerEngineChecks.java` and can run with:
 
 ```bash
 mkdir -p /tmp/skybound-checks
-javac -d /tmp/skybound-checks app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java tools/RunnerEngineChecks.java
+javac -d /tmp/skybound-checks app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java app/src/main/java/com/stepan/skyboundrunner/SceneryLayout.java tools/RunnerEngineChecks.java
 java -cp /tmp/skybound-checks com.stepan.skyboundrunner.RunnerEngineChecks
 ```
 
