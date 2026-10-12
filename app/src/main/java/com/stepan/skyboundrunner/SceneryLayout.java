@@ -1,11 +1,18 @@
 package com.stepan.skyboundrunner;
 
-/** Stateless, seeded positions for the parallax scenery; no save data is needed. */
+import java.util.List;
+
+/** Stateless, seeded positions for the scenery; no save data is needed. */
 final class SceneryLayout {
     static final float BUILDING_STEP = 54f;
     static final float FAR_SCROLL = .22f;
     static final float NEAR_SCROLL = .39f;
-    static final float PALM_SCROLL = .64f;
+    static final float PALM_SCROLL = 1f; // Roots must scroll with the terrain.
+    static final float PALM_EXTENT = 70f;
+    private static final float HOLE_CLEARANCE = PALM_EXTENT + 2f;
+    private static final float[] PALM_HEIGHTS = {111f, 112f, 113f, 114f, 116f};
+    private static final float[] PALM_TRUNKS = {5f, 6.5f, 4.5f, 7f, 5.5f};
+    private static final float[] PALM_LEANS = {-7f, 8f, -3f, 10f, 0f};
 
     private SceneryLayout() { }
 
@@ -25,6 +32,31 @@ final class SceneryLayout {
         float jitter = (random01(seed, index, 0x2B992DDFA23249D6L) - .5f) * .24f;
         return (index + jitter) * palmStep(screenWidth);
     }
+
+    static float groundedPalmX(long seed, int index, float screenWidth,
+                               List<RunnerEngine.Hazard> hazards) {
+        float x = palmX(seed, index, screenWidth);
+        for (RunnerEngine.Hazard hazard : hazards) {
+            if (hazard.type != RunnerEngine.HazardType.HOLE) continue;
+            float left = hazard.x - HOLE_CLEARANCE;
+            if (left >= x) break;
+            float right = hazard.end() + HOLE_CLEARANCE;
+            if (x < right) {
+                // Move the whole crown clear of the hole, without dropping a
+                // tree from its slot and leaving an empty screen behind.
+                return x - left <= right - x ? left : right;
+            }
+        }
+        return x;
+    }
+
+    static int palmView(long seed, int index) {
+        return (int) (random01(seed, index, 0xA9BC27D4E5168073L) * 5f);
+    }
+
+    static float palmHeight(int view) { return PALM_HEIGHTS[view]; }
+    static float palmTrunkWidth(int view) { return PALM_TRUNKS[view]; }
+    static float palmLean(int view) { return PALM_LEANS[view]; }
 
     static float buildingWidth(long seed, int index, boolean near) {
         int gap = 1 + (int) (random01(seed, index,

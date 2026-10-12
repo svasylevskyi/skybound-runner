@@ -19,17 +19,29 @@ public final class RunnerView extends View {
     private static final String OLD_SCORES_KEY = "completed_attempt_distances";
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
-    private static final int FAR_CITY = Color.rgb(154, 194, 217);
-    private static final int FAR_CITY_EDGE = Color.rgb(139, 183, 209);
-    private static final int FAR_WINDOWS = Color.rgb(184, 216, 230);
-    private static final int NEAR_CITY = Color.rgb(101, 158, 190);
-    private static final int NEAR_CITY_EDGE = Color.rgb(82, 138, 174);
-    private static final int NEAR_WINDOWS = Color.rgb(166, 212, 225);
+    private static final int FAR_CITY = Color.rgb(166, 203, 224);
+    private static final int FAR_CITY_EDGE = Color.rgb(151, 194, 219);
+    private static final int FAR_WINDOWS = Color.rgb(192, 223, 236);
+    private static final int NEAR_CITY = Color.rgb(115, 170, 200);
+    private static final int NEAR_CITY_EDGE = Color.rgb(96, 151, 185);
+    private static final int NEAR_WINDOWS = Color.rgb(177, 220, 232);
     private static final int PALM_TRUNK = Color.rgb(77, 122, 140);
     private static final int PALM_LEAF = Color.rgb(55, 151, 143);
     private static final int PALM_LEAF_SHADE = Color.rgb(48, 137, 135);
-    private static final float[] FROND_SPREAD = {-56f, -45f, -28f, 27f, 44f, 56f};
-    private static final float[] FROND_DROP = {16f, -8f, -24f, -23f, -7f, 17f};
+    private static final float[][] FROND_SPREAD = {
+            {-56f, -45f, -28f, 27f, 44f, 56f},
+            {-59f, -40f, -21f, 26f, 39f, 53f},
+            {-49f, -36f, -18f, 21f, 43f, 58f},
+            {-61f, -47f, -30f, 18f, 36f, 55f},
+            {-52f, -38f, -24f, 30f, 48f, 59f}
+    };
+    private static final float[][] FROND_DROP = {
+            {16f, -8f, -24f, -23f, -7f, 17f},
+            {22f, 2f, -21f, -27f, -10f, 13f},
+            {11f, -15f, -28f, -17f, -3f, 21f},
+            {19f, -11f, -19f, -25f, 0f, 23f},
+            {15f, -4f, -26f, -29f, -12f, 14f}
+    };
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int DAMAGE_BLINK_BLUE = Color.rgb(218, 245, 255);
     private static final int CAR_GLASS = Color.rgb(91, 162, 210);
@@ -94,8 +106,8 @@ public final class RunnerView extends View {
         canvas.scale(scale, scale);
         canvas.drawColor(SKY);
         float cameraX = Math.max(0f, engine.getPlayerX() - logicalWidth * .30f);
-        drawScenery(canvas, cameraX);
         engine.generateAhead(cameraX + logicalWidth + 550f);
+        drawScenery(canvas, cameraX);
         drawWorld(canvas, cameraX);
         drawBonuses(canvas, cameraX);
         drawHud(canvas);
@@ -167,34 +179,39 @@ public final class RunnerView extends View {
         float step = SceneryLayout.palmStep(logicalWidth);
         for (int index = SceneryLayout.firstIndex(scrollX, step);
                 index <= SceneryLayout.lastIndex(scrollX + logicalWidth, step); index++) {
-            float x = SceneryLayout.palmX(seed, index, logicalWidth);
-            if (x < scrollX - 70f || x > scrollX + logicalWidth + 70f) continue;
-            float height = 100f + SceneryLayout.random01(seed, index,
-                    0xEC889D29980E9F4DL) * 36f;
-            float lean = (SceneryLayout.random01(seed, index,
-                    0x643B552E6162311FL) - .5f) * 28f;
-            drawPalm(canvas, x, height, lean);
+            float x = SceneryLayout.groundedPalmX(seed, index, logicalWidth,
+                    engine.getHazards());
+            if (x < scrollX - SceneryLayout.PALM_EXTENT
+                    || x > scrollX + logicalWidth + SceneryLayout.PALM_EXTENT) continue;
+            int view = SceneryLayout.palmView(seed, index);
+            float halfRoot = SceneryLayout.palmTrunkWidth(view) / 2f + 1f;
+            float rootY = Math.max(engine.surfaceYAt(x - halfRoot),
+                    engine.surfaceYAt(x + halfRoot)) + 2f;
+            drawPalm(canvas, x, rootY, view);
         }
         canvas.restore();
     }
 
-    private void drawPalm(Canvas canvas, float x, float height, float lean) {
-        float rootY = RunnerEngine.GROUND_Y + 16f;
+    private void drawPalm(Canvas canvas, float x, float rootY, int view) {
+        float height = SceneryLayout.palmHeight(view);
+        float lean = SceneryLayout.palmLean(view);
+        float halfTrunk = SceneryLayout.palmTrunkWidth(view) / 2f;
         float crownX = x + lean;
         float crownY = rootY - height;
         palmPath.rewind();
-        palmPath.moveTo(x - 3.5f, rootY);
-        palmPath.cubicTo(x - 5f, rootY - height * .36f,
-                crownX - 7f, crownY + height * .31f, crownX - 2.5f, crownY);
-        palmPath.lineTo(crownX + 2.5f, crownY);
+        palmPath.moveTo(x - halfTrunk, rootY);
+        palmPath.cubicTo(x - halfTrunk - 1f, rootY - height * .36f,
+                crownX - halfTrunk - 3f, crownY + height * .31f,
+                crownX - halfTrunk * .7f, crownY);
+        palmPath.lineTo(crownX + halfTrunk * .7f, crownY);
         palmPath.cubicTo(crownX - 1f, crownY + height * .36f,
-                x + 3f, rootY - height * .28f, x + 3.5f, rootY);
+                x + halfTrunk, rootY - height * .28f, x + halfTrunk, rootY);
         palmPath.close();
         paint.setColor(PALM_TRUNK);
         canvas.drawPath(palmPath, paint);
-        for (int i = 0; i < FROND_SPREAD.length; i++) {
-            float dx = FROND_SPREAD[i];
-            float dy = FROND_DROP[i];
+        for (int i = 0; i < FROND_SPREAD[view].length; i++) {
+            float dx = FROND_SPREAD[view][i];
+            float dy = FROND_DROP[view][i];
             palmPath.rewind();
             palmPath.moveTo(crownX, crownY);
             palmPath.quadTo(crownX + dx * .55f, crownY - 18f,

@@ -2,7 +2,7 @@
 
 A lightweight Android side scroller prototype. The dark blue hovercar moves automatically; tap anywhere while moving to jump. Raised yellow walls act as ledges, holes must be cleared, and depressions can be jumped over or escaped after landing inside. Ledges and depressions vary from 4 to 10 m high or deep, below the car's 11.1 m jump height. Flat ground is 0°; height-changing ledge and depression edges have random inclines from 1° to 90°, where 90° is vertical. Tapping Start on a fresh launch generates a new course.
 
-The background has a dense, two-layer futuristic skyline with a few small gaps between skyscrapers. Palm trees scroll in front of the buildings, with one to five visible on each screen. Both layers are generated from the course seed and remain in the same places after pausing or restoring a run.
+The background has a dense, two-layer futuristic skyline with a few small gaps between skyscrapers. Five palm shapes with slightly different heights, leaves, and trunks appear in front of the buildings, with one to five visible on each screen. The skyline scrolls more slowly for depth; palms share the terrain's position so their roots touch its surface and their leaves stay clear of holes. The scenery is generated from the course seed and remains in the same places after pausing or restoring a run.
 
 ## Playing
 
