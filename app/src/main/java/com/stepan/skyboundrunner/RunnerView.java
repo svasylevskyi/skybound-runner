@@ -1081,6 +1081,8 @@ public final class RunnerView extends View {
         out.putFloat("countdown", engine.getCountdownSeconds());
         out.putDouble("elapsedRun", engine.getElapsedRunSeconds());
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
+        out.putBoolean("airborneMomentum", engine.hasAirborneMomentum());
+        out.putFloat("airborneSpeed", engine.getAirborneSpeed());
         out.putFloatArray("waterState", engine.getWaterState());
         out.putInt("waterEncounters", engine.getWaterEncounters());
         out.putBoolean("waitingForJump", engine.isWaitingForJump());
@@ -1132,6 +1134,8 @@ public final class RunnerView extends View {
             engine.restoreLifeLossRemainingSeconds(saved.getFloat("lifeLossRemaining", .5f));
             engine.restoreTerrainStop(saved.getBoolean("waitingForJump", false));
             engine.restoreWaterState(saved.getFloatArray("waterState"));
+            engine.restoreAirborneMomentum(saved.getBoolean("airborneMomentum", false),
+                    saved.getFloat("airborneSpeed", 0f));
             engine.restoreWaterEncounters(saved.getInt("waterEncounters", 0));
             engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
             engine.restoreCollectedStars(saved.getFloatArray("collectedStars"));

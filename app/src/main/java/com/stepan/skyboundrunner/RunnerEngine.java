@@ -63,6 +63,8 @@ public final class RunnerEngine {
     private static final float SLOPE_GRAVITY_RESPONSE_SECONDS = .12f;
     private static final float SLOPE_MOMENTUM_SECONDS = .07f;
     private static final float SLOPE_RECOVERY_PER_SECOND = 1.5f;
+    // Small wheel/suspension travel allows gentle downhill transitions to stay grounded.
+    private static final float DOWNHILL_CONTACT_TRAVEL = 2.5f;
     private static final HazardType[] HAZARD_TYPES = HazardType.values();
 
     public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER, LIFE_LOSS }
@@ -344,6 +346,8 @@ public final class RunnerEngine {
     private int bonusPoints;
     private float playerY;
     private float velocityY;
+    private boolean airborneMomentum;
+    private float airborneSpeed;
     private boolean controlledJumpInProgress;
     private boolean secondJumpUsed;
     private boolean firstJumpCompleted;
@@ -414,6 +418,8 @@ public final class RunnerEngine {
         bonusPoints = 0;
         playerY = GROUND_Y - PLAYER_HEIGHT;
         velocityY = 0f;
+        airborneMomentum = false;
+        airborneSpeed = 0f;
         controlledJumpInProgress = false;
         secondJumpUsed = false;
         firstJumpCompleted = false;
@@ -840,13 +846,17 @@ public final class RunnerEngine {
             return;
         }
         if (mode == Mode.RUNNING && isStanding()) {
-            velocityY = JUMP_VELOCITY;
-            controlledJumpInProgress = true;
-            secondJumpUsed = false;
             if (waitingForJump || terrainSpeedMultiplier < 0f) {
                 waitingForJump = false;
                 terrainSpeedMultiplier = 1f;
             }
+            float takeoffSpeed = getSpeed();
+            int slope = supportSlopeDegrees(playerX, playerY + PLAYER_HEIGHT);
+            velocityY = JUMP_VELOCITY + slopeLaunchVelocity(takeoffSpeed, slope);
+            airborneSpeed = takeoffSpeed;
+            airborneMomentum = true;
+            controlledJumpInProgress = true;
+            secondJumpUsed = false;
         } else if (mode == Mode.RUNNING && doubleJumpEnabled
                 && controlledJumpInProgress && !secondJumpUsed) {
             velocityY = JUMP_VELOCITY;
@@ -877,7 +887,7 @@ public final class RunnerEngine {
     }
 
     private boolean isStanding() {
-        if (inWater) return false;
+        if (inWater || airborneMomentum) return false;
         float feet = playerY + PLAYER_HEIGHT;
         return velocityY >= 0f
                 && Math.abs(feet - surfaceYForPlayer(playerX, feet)) < 1.2f;
@@ -923,11 +933,21 @@ public final class RunnerEngine {
         float oldFeet = playerY + PLAYER_HEIGHT;
         float oldSurface = surfaceYForPlayer(oldX, oldFeet);
         boolean wasStanding = isStanding();
+        int oldSlope = wasStanding ? supportSlopeDegrees(oldX, oldFeet) : 0;
         adjustSlopeSpeed(dt, wasStanding, oldX + PLAYER_WIDTH / 2f);
-        float pace = getBaseSpeed() / BASE_SPEED;
-        playerX += getSpeed() * dt;
-        playerY += velocityY * pace * dt + .5f * GRAVITY * pace * pace * dt * dt;
-        velocityY += GRAVITY * pace * dt;
+        float horizontalSpeed = getSpeed();
+        float nextX = oldX + horizontalSpeed * dt;
+        float nextSurface = wasStanding ? surfaceYForPlayer(nextX, oldFeet) : Float.NaN;
+        boolean departed = wasStanding && leavesSurface(oldSurface, nextSurface,
+                oldSlope, supportSlopeDegrees(nextX, oldFeet), horizontalSpeed, dt);
+        if (departed) {
+            airborneSpeed = horizontalSpeed;
+            airborneMomentum = true;
+            velocityY = slopeLaunchVelocity(horizontalSpeed, oldSlope);
+        }
+        playerX = nextX;
+        playerY += velocityY * dt + .5f * GRAVITY * dt * dt;
+        velocityY += GRAVITY * dt;
         stopAtVerticalFace(oldX, wasStanding);
         if (!waitingForJump && wasStanding) stopAtSlopeFoot(oldX);
         bumpPlatformUnderside(oldFeet);
@@ -970,14 +990,15 @@ public final class RunnerEngine {
                     : Math.max(1.02f, (float) Math.tan(Math.toRadians(slope)));
             boolean continuous = !Float.isNaN(oldSurface) && !Float.isNaN(surface)
                     && Math.abs(surface - oldSurface) <= dx * risePerUnit + .8f;
-            if (wasStanding && continuous) {
+            if (wasStanding && continuous && !departed) {
                 // Grounded movement follows uphill and downhill planes.
                 landAt(surface);
             } else {
-                boolean landedOnRamp = velocityY >= 0f && !Float.isNaN(oldSurface)
+                boolean landedOnRamp = !departed && velocityY >= 0f
+                        && !Float.isNaN(oldSurface)
                         && oldFeet <= oldSurface + 1f
                         && landOnCrossedRisingSlope(oldX, oldFeet, feet);
-                if (!landedOnRamp && velocityY >= 0f && !Float.isNaN(surface)
+                if (!departed && !landedOnRamp && velocityY >= 0f && !Float.isNaN(surface)
                         && playerY + PLAYER_HEIGHT >= surface
                         && (oldFeet <= surface + 1f
                         // The rising surface can cross the feet during this frame.
@@ -1052,6 +1073,7 @@ public final class RunnerEngine {
     private void beginWater(Hazard hole) {
         waterEntrySpeed = Math.max(0f, getSpeed());
         inWater = true;
+        airborneMomentum = false;
         waterEncounters++;
         waterHoleX = hole.x;
         waterVerticalSpeed = waterEntrySpeed * WATER_SPEED_FRACTION;
@@ -1102,6 +1124,8 @@ public final class RunnerEngine {
             terrainSpeedMultiplier = waterEntrySpeed / getBaseSpeed();
             playerY = GROUND_Y - PLAYER_HEIGHT;
             velocityY = WATER_EXIT_JUMP_VELOCITY;
+            airborneSpeed = waterEntrySpeed;
+            airborneMomentum = true;
             waterVerticalSpeed = 0f;
         }
         updateMovingEnemies(dt);
@@ -1534,6 +1558,7 @@ public final class RunnerEngine {
     private void landAt(float top) {
         playerY = top - PLAYER_HEIGHT;
         velocityY = 0f;
+        airborneMomentum = false;
         if (controlledJumpInProgress) firstJumpCompleted = true;
         controlledJumpInProgress = false;
         secondJumpUsed = false;
@@ -1576,7 +1601,40 @@ public final class RunnerEngine {
         return 0;
     }
 
+    private int supportSlopeDegrees(float left, float feet) {
+        for (Platform platform : platforms) {
+            if (platform.x >= left + PLAYER_WIDTH) break;
+            if (left < platform.end() && Math.abs(feet - platform.top) < 1.2f) return 0;
+        }
+        return slopeDegreesAt(left + PLAYER_WIDTH / 2f);
+    }
+
+    private static float slopeLaunchVelocity(float horizontalSpeed, int slopeDegrees) {
+        // Downhill is positive screen Y. At departure, the tangent contributes
+        // to the vertical component; a flat edge contributes none.
+        return -horizontalSpeed * (float) Math.sin(Math.toRadians(slopeDegrees));
+    }
+
+    private static boolean leavesSurface(float oldSurface, float nextSurface,
+                                         int oldSlope, int nextSlope, float speed,
+                                         float dt) {
+        if (Float.isNaN(nextSurface)) return true;
+        float drop = nextSurface - oldSurface;
+        if (drop <= 0f) return false;
+        float tangentDrop = -speed * dt * (float) Math.tan(
+                Math.toRadians(Math.max(-88, Math.min(88, oldSlope))));
+        float nextTangentDrop = -speed * dt * (float) Math.tan(
+                Math.toRadians(Math.max(-88, Math.min(88, nextSlope))));
+        // At a sharp downhill corner the old tangent cannot instantly follow
+        // the new face, even if this particular update barely crossed the corner.
+        if (nextTangentDrop - tangentDrop > DOWNHILL_CONTACT_TRAVEL) return true;
+        float fallingDistance = .5f * GRAVITY * dt * dt;
+        return drop > Math.max(0f, tangentDrop) + fallingDistance
+                + DOWNHILL_CONTACT_TRAVEL;
+    }
+
     private void adjustSlopeSpeed(float dt, boolean grounded, float center) {
+        if (airborneMomentum) return;
         if (waitingForJump) {
             terrainSpeedMultiplier = 0f;
             return;
@@ -2061,8 +2119,9 @@ public final class RunnerEngine {
     public float getPlayerPitchDegrees() {
         if (inWater) return (float) Math.toDegrees(Math.atan2(-waterVerticalSpeed,
                 Math.max(1f, getSpeed())));
-        if (isStanding()) return slopeDegreesAt(playerX + PLAYER_WIDTH / 2f);
-        return (float) Math.toDegrees(Math.atan2(-velocityY, Math.max(1f, Math.abs(getSpeed()))));
+        if (isStanding()) return supportSlopeDegrees(playerX, playerY + PLAYER_HEIGHT);
+        return (float) Math.toDegrees(Math.atan2(-velocityY,
+                Math.max(1f, Math.abs(getSpeed()))));
     }
     public boolean isControlledJumpInProgress() { return controlledJumpInProgress; }
     public boolean hasCompletedFirstJump() { return firstJumpCompleted; }
@@ -2092,6 +2151,15 @@ public final class RunnerEngine {
     public float getCountdownSeconds() { return countdownSeconds; }
     public double getElapsedRunSeconds() { return elapsedRunSeconds; }
     public float getTerrainSpeedMultiplier() { return terrainSpeedMultiplier; }
+    public boolean hasAirborneMomentum() { return airborneMomentum; }
+    public float getAirborneSpeed() { return airborneSpeed; }
+    public void restoreAirborneMomentum(boolean airborne, float speed) {
+        if (airborne && !inWater && Float.isFinite(speed)
+                && Math.abs(speed) <= 2f * getBaseSpeed()) {
+            airborneMomentum = true;
+            airborneSpeed = speed;
+        }
+    }
     public boolean isInWater() { return inWater; }
     public float getActiveWaterHoleX() { return waterHoleX; }
     public boolean shouldShowWaterHint() { return inWater && waterEncounters == 1; }
@@ -2137,7 +2205,7 @@ public final class RunnerEngine {
     }
     public float getSpeed() {
         return inWater ? waterEntrySpeed * WATER_SPEED_FRACTION
-                : getBaseSpeed() * terrainSpeedMultiplier;
+                : airborneMomentum ? airborneSpeed : getBaseSpeed() * terrainSpeedMultiplier;
     }
     public float getSpeedMetersPerSecond() { return getSpeed() / WORLD_UNITS_PER_METER; }
     public int getBestDistance() { return bestDistance; }
