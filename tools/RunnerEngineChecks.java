@@ -269,6 +269,8 @@ public final class RunnerEngineChecks {
             if (center > first.x + 5f && center < first.flatStart - 5f) {
                 check(Math.abs(feet - first.surfaceYAt(center)) < 1.5f,
                         "runner follows first incline");
+                check(Math.abs(game.getPlayerPitchDegrees() - first.slopeDegreesAt(center)) < .01f,
+                        "hovercar tips with the first incline");
                 if (type == RunnerEngine.HazardType.WALL) {
                     check(game.getSpeed() < game.getBaseSpeed(), "uphill slows runner");
                 } else {
@@ -279,6 +281,8 @@ public final class RunnerEngineChecks {
             if (center > first.flatEnd + 5f && center < first.end() - 5f) {
                 check(Math.abs(feet - first.surfaceYAt(center)) < 1.5f,
                         "runner follows exit incline");
+                check(Math.abs(game.getPlayerPitchDegrees() - first.slopeDegreesAt(center)) < .01f,
+                        "hovercar tips with the exit incline");
                 if (type == RunnerEngine.HazardType.WALL) {
                     check(game.getSpeed() > game.getBaseSpeed(), "downhill speeds runner");
                 } else {
@@ -349,6 +353,93 @@ public final class RunnerEngineChecks {
         restored.continueGame();
         restored.update(1f / 120f);
         check(restored.getLives() == RunnerEngine.MAX_LIVES, "restored slope can be continued");
+    }
+
+    private static void testHovercarJumpPitch() {
+        RunnerEngine game = started(1L);
+        check(game.getPlayerPitchDegrees() == 0f, "hovercar is level on flat ground");
+        game.jump();
+        check(game.getPlayerPitchDegrees() > 0f, "hovercar tips nose up while rising");
+        for (int step = 0; step < 65; step++) game.update(1f / 120f);
+        check(game.getVelocityY() > 0f && game.getPlayerPitchDegrees() < 0f,
+                "hovercar tips nose down while descending");
+    }
+
+    private static void testLandingOnSteepRisingSlopes() {
+        for (RunnerEngine.HazardType type : new RunnerEngine.HazardType[]{
+                RunnerEngine.HazardType.WALL, RunnerEngine.HazardType.DIP}) {
+            boolean checked = false;
+            for (long trial = 0; trial < 1000 && !checked; trial++) {
+                long seed = trial * 0x9E3779B97F4A7C15L;
+                RunnerEngine layout = new RunnerEngine();
+                layout.startNewGame(seed);
+                RunnerEngine.Hazard slope = layout.getHazards().get(0);
+                int angle = type == RunnerEngine.HazardType.WALL
+                        ? slope.entranceDegrees : slope.exitDegrees;
+                float start = type == RunnerEngine.HazardType.WALL
+                        ? slope.x : slope.flatEnd;
+                float end = type == RunnerEngine.HazardType.WALL
+                        ? slope.flatStart : slope.end();
+                if (slope.type != type || angle < 64 || angle > 68
+                        || end - start < 25f) continue;
+
+                float center = (start + end) / 2f;
+                float x = center - RunnerEngine.PLAYER_WIDTH / 2f;
+                float feet = slope.surfaceYAt(center) - 2f;
+                RunnerEngine game = new RunnerEngine();
+                game.restore(seed, RunnerEngine.MAX_LIVES, x,
+                        feet - RunnerEngine.PLAYER_HEIGHT, 180f, 0f, 0d, 1f,
+                        RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+                game.continueGame();
+                game.update(1f / 120f);
+                float afterCenter = game.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f;
+                float surface = slope.surfaceYAt(afterCenter);
+                check(Math.abs(game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT - surface) < .15f
+                                && game.getVelocityY() == 0f
+                                && game.getLives() == RunnerEngine.MAX_LIVES,
+                        "descending runner lands on steep " + type + " slope: seed=" + seed);
+                checked = true;
+            }
+            check(checked, "found a reproducible steep " + type + " landing");
+        }
+    }
+
+    private static void testLandingAcrossShortRisingSlopes() {
+        for (RunnerEngine.HazardType type : new RunnerEngine.HazardType[]{
+                RunnerEngine.HazardType.WALL, RunnerEngine.HazardType.DIP}) {
+            boolean checked = false;
+            for (long trial = 0; trial < 5000 && !checked; trial++) {
+                long seed = trial * 0x9E3779B97F4A7C15L;
+                RunnerEngine layout = new RunnerEngine();
+                layout.startNewGame(seed);
+                RunnerEngine.Hazard slope = layout.getHazards().get(0);
+                float start = type == RunnerEngine.HazardType.WALL
+                        ? slope.x : slope.flatEnd;
+                float end = type == RunnerEngine.HazardType.WALL
+                        ? slope.flatStart : slope.end();
+                if (slope.type != type || end - start < 10f || end - start > 11.5f)
+                    continue;
+
+                float center = start - 2f;
+                float feet = (type == RunnerEngine.HazardType.WALL
+                        ? RunnerEngine.GROUND_Y : RunnerEngine.GROUND_Y + slope.height) - 4f;
+                RunnerEngine game = new RunnerEngine();
+                game.restore(seed, RunnerEngine.MAX_LIVES,
+                        center - RunnerEngine.PLAYER_WIDTH / 2f,
+                        feet - RunnerEngine.PLAYER_HEIGHT, 180f, 0f, 600d, 1f,
+                        RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+                game.continueGame();
+                game.update(1f / 120f);
+                float afterCenter = game.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f;
+                check(game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                                <= slope.surfaceYAt(afterCenter) + .15f
+                                && game.getVelocityY() == 0f
+                                && game.getLives() == RunnerEngine.MAX_LIVES,
+                        "runner cannot skip a short rising " + type + " slope: seed=" + seed);
+                checked = true;
+            }
+            check(checked, "found a short rising " + type + " slope");
+        }
     }
 
     private static void testSteepSlopeSlideAndJump() {
@@ -1380,6 +1471,9 @@ public final class RunnerEngineChecks {
         testLayout();
         testFirstJumpHint();
         testSlopes();
+        testHovercarJumpPitch();
+        testLandingOnSteepRisingSlopes();
+        testLandingAcrossShortRisingSlopes();
         testTallTerrainIsPlayable();
         testSteepSlopeSlideAndJump();
         testFirstHazards();
