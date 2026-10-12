@@ -18,19 +18,19 @@ public final class RunnerView extends View {
     private static final String BEST_SCORE_KEY = "best_run_distance";
     private static final String BEST_POINTS_KEY = "best_run_score";
     private static final String OLD_SCORES_KEY = "completed_attempt_distances";
-    private static final int SKY = Color.rgb(132, 211, 246);
+    private static final int SKY = Color.rgb(105, 181, 220);
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int WATER = Color.rgb(36, 140, 213);
     private static final int WATER_EDGE = Color.rgb(171, 239, 255);
-    private static final int FAR_CITY = Color.rgb(166, 203, 224);
-    private static final int FAR_CITY_EDGE = Color.rgb(151, 194, 219);
-    private static final int FAR_WINDOWS = Color.rgb(192, 223, 236);
-    private static final int NEAR_CITY = Color.rgb(115, 170, 200);
-    private static final int NEAR_CITY_EDGE = Color.rgb(96, 151, 185);
-    private static final int NEAR_WINDOWS = Color.rgb(177, 220, 232);
-    private static final int PALM_TRUNK = Color.rgb(77, 122, 140);
-    private static final int PALM_LEAF = Color.rgb(55, 151, 143);
-    private static final int PALM_LEAF_SHADE = Color.rgb(48, 137, 135);
+    private static final int FAR_CITY = Color.rgb(119, 160, 187);
+    private static final int FAR_CITY_EDGE = Color.rgb(108, 150, 180);
+    private static final int FAR_WINDOWS = Color.rgb(147, 183, 203);
+    private static final int NEAR_CITY = Color.rgb(83, 133, 165);
+    private static final int NEAR_CITY_EDGE = Color.rgb(73, 120, 154);
+    private static final int NEAR_WINDOWS = Color.rgb(129, 176, 198);
+    private static final int PALM_TRUNK = Color.rgb(57, 104, 124);
+    private static final int PALM_LEAF = Color.rgb(43, 123, 119);
+    private static final int PALM_LEAF_SHADE = Color.rgb(37, 110, 108);
     private static final int GRASS_BASE = Color.rgb(77, 165, 92);
     private static final int GRASS_TIPS = Color.rgb(64, 154, 85);
     private static final float[][] FROND_SPREAD = {
@@ -270,6 +270,8 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
+        // Draw the hull behind the water so the submerged part disappears below waves.
+        if (engine.isInWater()) drawHovercar(canvas);
         drawWater(canvas, cameraX, right);
         drawGrass(canvas, cameraX, right);
         paint.setColor(YELLOW);
@@ -295,7 +297,7 @@ public final class RunnerView extends View {
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
         drawStarBursts(canvas, cameraX, right);
-        drawHovercar(canvas);
+        if (!engine.isInWater()) drawHovercar(canvas);
         canvas.restore();
     }
 
@@ -607,8 +609,9 @@ public final class RunnerView extends View {
             drawPauseButton(canvas);
         }
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
-                && !engine.hasCompletedFirstJump()) {
-            text(canvas, "Tap anywhere to jump", logicalWidth / 2f, 122f,
+                && (engine.isInWater() || !engine.hasCompletedFirstJump())) {
+            text(canvas, engine.isInWater() ? "Tap repeatedly to stay afloat"
+                            : "Tap anywhere to jump", logicalWidth / 2f, 122f,
                     18f, INK, Paint.Align.CENTER);
         }
     }
@@ -791,6 +794,7 @@ public final class RunnerView extends View {
         out.putFloat("countdown", engine.getCountdownSeconds());
         out.putDouble("elapsedRun", engine.getElapsedRunSeconds());
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
+        out.putFloatArray("waterState", engine.getWaterState());
         out.putBoolean("waitingForJump", engine.isWaitingForJump());
         out.putInt("health", engine.getHealth());
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
@@ -835,6 +839,7 @@ public final class RunnerView extends View {
                     saved.getFloatArray("antagonistState"),
                     saved.getFloatArray("coloredProjectiles"));
             engine.restoreTerrainStop(saved.getBoolean("waitingForJump", false));
+            engine.restoreWaterState(saved.getFloatArray("waterState"));
             engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
             engine.restoreCollectedStars(saved.getFloatArray("collectedStars"));
             engine.restoreStarBursts(saved.getFloatArray("starBursts"));
