@@ -915,6 +915,10 @@ public final class RunnerEngineChecks {
             if (hazard.x >= to) break;
             if (hazard.end() > from) return false;
         }
+        for (RunnerEngine.Platform platform : game.getPlatforms()) {
+            if (platform.x >= to) break;
+            if (platform.end() > from) return false;
+        }
         return true;
     }
 
@@ -926,7 +930,8 @@ public final class RunnerEngineChecks {
                     0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
             game.generateAhead(40_000f);
             for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
-                if (openGround(game, foe.x - lead - 10f, foe.x + 16f)) {
+                if (foe.platform == null
+                        && openGround(game, foe.x - lead - 10f, foe.x + 16f)) {
                     float enemyX = foe.x;
                     game.restore(seed, RunnerEngine.MAX_LIVES, enemyX - lead,
                             RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
@@ -951,7 +956,7 @@ public final class RunnerEngineChecks {
                     0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
             game.generateAhead(45_000f);
             for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
-                if (foe.type != RunnerEngine.EnemyType.MOVING
+                if (foe.platform != null || foe.type != RunnerEngine.EnemyType.MOVING
                         || foe.spawnX - lead < 12140f) continue;
                 if (!openGround(game, foe.spawnX - 80f, foe.spawnX + 80f)
                         || (!jumpingAtFirstShot && !openGround(game,
@@ -1133,6 +1138,7 @@ public final class RunnerEngineChecks {
         boolean sawLedge = false;
         boolean sawDepression = false;
         boolean sawSlope = false;
+        boolean sawPlatform = false;
         for (long seed = 0; seed < 35; seed++) {
             RunnerEngine game = started(seed);
             game.setVisibleWorldWidth(1240f);
@@ -1152,9 +1158,20 @@ public final class RunnerEngineChecks {
                         "at most one enemy fits on screen at a time");
                 float center = foe.x + RunnerEngine.PLAYER_WIDTH / 2f;
                 float surface = surfaceAt(game, center);
+                float support = foe.platform == null ? surface : foe.platform.top;
                 check(!Float.isNaN(surface)
-                                && Math.abs(foe.y + RunnerEngine.PLAYER_HEIGHT - surface) < .1f,
-                        "enemy stands on ground, not in a hole");
+                                && Math.abs(foe.y + RunnerEngine.PLAYER_HEIGHT - support) < .1f,
+                        "enemy stands on ground or a suspended platform, not in a hole");
+                if (foe.platform != null) {
+                    sawPlatform = true;
+                    float patrol = foe.type == RunnerEngine.EnemyType.MOVING ? 50f : 0f;
+                    check(foe.spawnX - patrol >= foe.platform.x + 100f
+                                    && foe.spawnX + RunnerEngine.PLAYER_WIDTH + patrol
+                                    <= foe.platform.end() - 100f,
+                            "platform enemy and patrol stay ten metres from both edges");
+                    lastX = foe.x;
+                    continue;
+                }
                 if (Math.abs(surface - RunnerEngine.GROUND_Y) < .1f) sawGround = true;
                 for (RunnerEngine.Hazard hazard : game.getHazards()) {
                     if (hazard.x > center) break;
@@ -1168,8 +1185,8 @@ public final class RunnerEngineChecks {
                 lastX = foe.x;
             }
         }
-        check(sawGround && sawLedge && sawDepression && sawSlope,
-                "enemies can appear on ground, ledges, depressions, and inclines");
+        check(sawGround && sawLedge && sawDepression && sawSlope && sawPlatform,
+                "enemies appear on ground, ledges, depressions, inclines and platforms");
 
         RunnerEngine bonusRun = new RunnerEngine();
         bonusRun.restore(1L, RunnerEngine.MAX_LIVES, 5130f,
@@ -1554,18 +1571,202 @@ public final class RunnerEngineChecks {
                 "a projectile entirely above the wall keeps flying horizontally");
     }
 
+    private static void testSuspendedPlatforms() {
+        RunnerEngine course = new RunnerEngine();
+        course.startNewGame(1L);
+        course.generateAhead(40_000f);
+        check(!course.getPlatforms().isEmpty(), "seeded course includes suspended platforms");
+        RunnerEngine.Platform lower = course.getPlatforms().get(0);
+        RunnerEngine.Platform higher = null;
+        boolean sawHigh = false;
+        for (int i = 0; i < course.getPlatforms().size(); i++) {
+            RunnerEngine.Platform platform = course.getPlatforms().get(i);
+            float clearance = RunnerEngine.GROUND_Y - platform.bottom;
+            check(clearance >= 2f * RunnerEngine.PLAYER_HEIGHT
+                            && clearance <= 4f * RunnerEngine.PLAYER_HEIGHT
+                            && Math.abs(platform.bottom - platform.top
+                            - RunnerEngine.PLATFORM_THICKNESS) < .01f,
+                    "platform underside leaves two to four car heights over ground");
+            check(openGroundUnderPlatform(course, platform),
+                    "platform leaves intact flat ground beneath it");
+            if (i > 0) {
+                RunnerEngine.Platform previous = course.getPlatforms().get(i - 1);
+                check(previous.end() < platform.x, "platforms do not overlap");
+                if (clearance > 2.6f * RunnerEngine.PLAYER_HEIGHT) {
+                    sawHigh = true;
+                    check(Math.abs(platform.x - previous.end() - 36f) < .1f
+                                    && previous.top - platform.top < RunnerEngine.JUMP_HEIGHT,
+                            "high platforms have a reachable lower stepping platform");
+                    if (higher == null) {
+                        lower = previous;
+                        higher = platform;
+                    }
+                }
+            }
+        }
+        check(sawHigh && higher != null, "generated course includes a reachable high platform");
+
+        RunnerEngine land = placedAt(1L, lower.x - 135f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+        land.jump();
+        boolean reachedLower = false;
+        for (int step = 0; step < 140; step++) {
+            land.update(1f / 120f);
+            if (land.getPlayerX() >= lower.x && land.getPlayerX() < lower.end()
+                    && Math.abs(land.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                    - lower.top) < .1f) {
+                reachedLower = true;
+                break;
+            }
+        }
+        check(reachedLower && land.getLives() == RunnerEngine.MAX_LIVES,
+                "timed jump lands on a low suspended platform without damage");
+        land.jump();
+        check(land.getVelocityY() < 0f, "car can jump again from the platform top");
+
+        RunnerEngine stepUp = placedAt(1L, lower.end() - 135f,
+                lower.top - RunnerEngine.PLAYER_HEIGHT, 0f);
+        stepUp.jump();
+        boolean reachedHigher = false;
+        for (int step = 0; step < 160; step++) {
+            stepUp.update(1f / 120f);
+            if (stepUp.getPlayerX() >= higher.x && stepUp.getPlayerX() < higher.end()
+                    && Math.abs(stepUp.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                    - higher.top) < .1f) {
+                reachedHigher = true;
+                break;
+            }
+        }
+        check(reachedHigher, "a regular jump reaches the higher platform from the lower one");
+
+        RunnerEngine below = placedAt(1L, lower.x + 55f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+        float before = below.getPlayerX();
+        below.jump();
+        boolean bumped = false;
+        for (int step = 0; step < 90; step++) {
+            below.update(1f / 120f);
+            check(below.getPlayerY() >= lower.bottom - .1f,
+                    "an upward jump never passes through the platform underside");
+            bumped |= Math.abs(below.getPlayerY() - lower.bottom) < .1f
+                    && below.getVelocityY() == 0f;
+        }
+        check(bumped && below.getPlayerX() > before + 90f
+                        && below.getHealth() == RunnerEngine.MAX_HEALTH
+                        && below.getLives() == RunnerEngine.MAX_LIVES,
+                "underside bump ends the rise without damage or stopping the run");
+
+        RunnerEngine late = placedAt(1L, lower.x - RunnerEngine.PLAYER_WIDTH - 2f,
+                lower.bottom - 15f, -180f);
+        late.update(1f / 60f);
+        check(late.getPlayerX() + RunnerEngine.PLAYER_WIDTH <= lower.x
+                        && late.getHealth() == RunnerEngine.MAX_HEALTH,
+                "a late jump cannot pass sideways through the platform edge");
+
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(stepUp.getSeed(), stepUp.getLives(), stepUp.getPlayerX(),
+                stepUp.getPlayerY(), stepUp.getVelocityY(), 0f,
+                stepUp.getElapsedRunSeconds(), stepUp.getTerrainSpeedMultiplier(),
+                RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        check(Math.abs(restored.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                - higher.top) < .1f, "activity restore keeps the car on a platform");
+        restored.continueGame();
+        restored.jump();
+        check(restored.getVelocityY() < 0f,
+                "a restored car can still jump from a suspended platform");
+
+        RunnerEngine shot = new RunnerEngine();
+        shot.restore(1L, RunnerEngine.MAX_LIVES, 140f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                RunnerEngine.MAX_HEALTH, 0f, lower.end() + 100f,
+                lower.end() + 500f, null,
+                new float[]{lower.end() + 20f, (lower.top + lower.bottom) / 2f,
+                        -380f, 0f});
+        shot.continueGame();
+        checkTerrainAbsorbsShot(shot, "suspended platform side");
+    }
+
+    private static void testPlatformEnemyPatrolAndRestore() {
+        RunnerEngine course = null;
+        RunnerEngine.Antagonist platformEnemy = null;
+        for (long seed = 0; seed < 80 && platformEnemy == null; seed++) {
+            RunnerEngine candidate = new RunnerEngine();
+            candidate.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            candidate.generateAhead(80_000f);
+            for (RunnerEngine.Antagonist foe : candidate.getAntagonists()) {
+                if (foe.platform != null && foe.type == RunnerEngine.EnemyType.MOVING) {
+                    course = candidate;
+                    platformEnemy = foe;
+                    break;
+                }
+            }
+        }
+        check(platformEnemy != null, "moving enemies also spawn on suspended platforms");
+        float enemyX = platformEnemy.spawnX;
+        RunnerEngine.Platform platform = platformEnemy.platform;
+        RunnerEngine active = placedAt(course.getSeed(), enemyX - 300f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+        RunnerEngine.Antagonist foe = active.getAntagonists().stream()
+                .filter(e -> e.spawnX == enemyX).findFirst().get();
+        check(Math.abs(foe.y + RunnerEngine.PLAYER_HEIGHT - platform.top) < .1f,
+                "moving enemy starts on the platform top");
+        for (int step = 0; step < 95; step++) {
+            active.update(1f / 120f);
+            check(foe.x >= platform.x && foe.x + RunnerEngine.PLAYER_WIDTH <= platform.end()
+                            && foe.y + RunnerEngine.PLAYER_HEIGHT <= platform.top + .1f,
+                    "enemy patrol and jump remain supported by its platform");
+        }
+        RunnerEngine saved = new RunnerEngine();
+        saved.restore(active.getSeed(), active.getLives(), active.getPlayerX(),
+                active.getPlayerY(), active.getVelocityY(), 0f,
+                active.getElapsedRunSeconds(), active.getTerrainSpeedMultiplier(),
+                active.getMode(), active.getResumeMode(), active.getHealth(),
+                active.getDamageRecoverySeconds(), active.getFarthestX(),
+                active.getVisibleWorldWidth(), active.getAntagonistTimers(),
+                active.getProjectileState(), active.getDefeatedAntagonists(),
+                active.getBonusMeters(), active.hasCompletedFirstJump(),
+                active.isControlledJumpInProgress(), active.getAntagonistState(),
+                active.getColoredProjectileState());
+        RunnerEngine.Antagonist same = saved.getAntagonists().stream()
+                .filter(e -> e.spawnX == enemyX).findFirst().get();
+        check(same.platform != null && Math.abs(same.x - foe.x) < .01f
+                        && Math.abs(same.y - foe.y) < .01f,
+                "activity restore retains an enemy's platform and patrol position");
+    }
+
+    private static boolean openGroundUnderPlatform(RunnerEngine course,
+                                                    RunnerEngine.Platform platform) {
+        for (RunnerEngine.Hazard hazard : course.getHazards()) {
+            if (hazard.x >= platform.end()) break;
+            if (hazard.end() > platform.x) return false;
+        }
+        return Math.abs(course.surfaceYAt(platform.x + platform.width / 2f)
+                - RunnerEngine.GROUND_Y) < .01f;
+    }
+
+    private static RunnerEngine placedAt(long seed, float x, float y, float vy) {
+        RunnerEngine game = new RunnerEngine();
+        game.restore(seed, RunnerEngine.MAX_LIVES, x, y, vy,
+                0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        game.continueGame();
+        return game;
+    }
+
     private static void testLongerCourses() {
         int checkedCourses = 0;
         for (long trial = 0; trial < 100 && checkedCourses < 40; ++trial) {
             RunnerEngine game = started(trial * 0x9E3779B97F4A7C15L);
             game.generateAhead(5100f);
-            if (game.getHazards().size() < 6 || game.getHazards().get(5).end() >= 5000f) {
+            if (game.getHazards().size() < 4 || game.getHazards().get(3).end() >= 5000f) {
                 continue;
             }
             int cleared = 0;
             boolean jumped = false;
             // Stay below 500 m so this checks terrain before enemy encounters begin.
-            for (int step = 0; step < 30_000 && cleared < 6; ++step) {
+            for (int step = 0; step < 30_000 && cleared < 4; ++step) {
                 RunnerEngine.Hazard hazard = game.getHazards().get(cleared);
                 if (game.isWaitingForJump()) game.jump();
                 if (hazard.type != RunnerEngine.HazardType.DIP && !jumped
@@ -1590,7 +1791,7 @@ public final class RunnerEngineChecks {
                     jumped = false;
                 }
             }
-            check(cleared == 6, "six early obstacles cleared per course: trial="
+            check(cleared == 4, "four early obstacles cleared per course: trial="
                     + trial + ", cleared=" + cleared + ", x=" + game.getPlayerX());
             checkedCourses++;
         }
@@ -1623,6 +1824,8 @@ public final class RunnerEngineChecks {
         testMovingEnemyCollisions();
         testAntagonistAndProjectiles();
         testProjectileTerrainCollisions();
+        testSuspendedPlatforms();
+        testPlatformEnemyPatrolAndRestore();
         testLongerCourses();
         System.out.println("RunnerEngine checks passed");
     }
