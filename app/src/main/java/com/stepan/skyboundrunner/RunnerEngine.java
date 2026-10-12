@@ -394,7 +394,8 @@ public final class RunnerEngine {
             HazardType type = HAZARD_TYPES[random.nextInt(HAZARD_TYPES.length)];
             float flatWidth;
             if (type == HazardType.HOLE) {
-                flatWidth = 92f + random.nextInt(27);
+                int formerWidth = 92 + random.nextInt(27); // 9.2–11.8 m.
+                flatWidth = formerWidth + random.nextInt(formerWidth + 1);
             } else if (type == HazardType.WALL) {
                 flatWidth = 105f + random.nextInt(38);
             } else {

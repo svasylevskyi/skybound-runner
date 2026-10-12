@@ -53,6 +53,8 @@ public final class RunnerEngineChecks {
         boolean sawSteep = false;
         boolean sawVertical = false;
         boolean sawHeightVariety = false;
+        boolean sawWideHole = false;
+        boolean sawFormerWidthHole = false;
         float previousHeight = -1f;
         for (long seed = 0; seed < 100; ++seed) {
             RunnerEngine game = started(seed);
@@ -63,6 +65,12 @@ public final class RunnerEngineChecks {
                 check(hazard.width <= 12000f, "shallow ramps remain finite");
                 check(hazard.x <= hazard.flatStart && hazard.flatStart < hazard.flatEnd
                         && hazard.flatEnd <= hazard.end(), "ramp and flat sections are ordered");
+                if (hazard.type == RunnerEngine.HazardType.HOLE) {
+                    check(hazard.width >= 92f && hazard.width <= 236f,
+                            "water holes range from the former width to twice that width");
+                    sawWideHole |= hazard.width > 118f;
+                    sawFormerWidthHole |= hazard.width <= 118f;
+                }
                 if (hazard.type != RunnerEngine.HazardType.HOLE) {
                     float height = hazard.height;
                     check(height >= 40f && height <= RunnerEngine.MAX_TERRAIN_HEIGHT
@@ -91,50 +99,69 @@ public final class RunnerEngineChecks {
                 previousEnd = hazard.end();
             }
         }
-        check(sawGentle && sawModerate && sawSteep && sawVertical && sawHeightVariety,
-                "generation includes varied heights, gentle, moderate, steep and vertical edges");
+        check(sawGentle && sawModerate && sawSteep && sawVertical && sawHeightVariety
+                        && sawWideHole && sawFormerWidthHole,
+                "generation includes varied inclines, heights, and narrow and wide water holes");
     }
 
     private static void testSceneryLayout() {
         long[] seeds = {1L, 328493L, Long.MIN_VALUE, Long.MAX_VALUE};
-        float[] widths = {540f, 720f, 960f, 1170f, 1440f};
+        float[] widths = {540f, 960f, 1440f};
         boolean[] viewsSeen = new boolean[5];
-        boolean movedPalmAwayFromHole = false;
+        boolean[] groupSizesSeen = new boolean[6];
+        boolean sawDenseScreen = false;
+        boolean skippedGroupAtHole = false;
         for (long seed : seeds) {
             RunnerEngine course = new RunnerEngine();
             course.startNewGame(seed);
             course.generateAhead(75_000f);
             for (float width : widths) {
-                float step = SceneryLayout.palmStep(width);
-                for (int frame = 0; frame < 400; frame++) {
-                    float left = frame * width / 9f * SceneryLayout.PALM_SCROLL;
-                    int visible = 0;
-                    for (int index = SceneryLayout.firstIndex(left, step);
-                            index <= SceneryLayout.lastIndex(left + width, step); index++) {
-                        float x = SceneryLayout.groundedPalmX(seed, index, width,
-                                course.getHazards());
-                        movedPalmAwayFromHole |= x != SceneryLayout.palmX(seed, index, width);
-                        if (x + SceneryLayout.PALM_EXTENT >= left
-                                && x - SceneryLayout.PALM_EXTENT <= left + width) visible++;
-                        check(x == SceneryLayout.groundedPalmX(seed, index, width,
-                                        course.getHazards()),
-                                "palm positions repeat for the same course");
+                for (int frame = 0; frame < 80; frame++) {
+                    float left = frame * width / 3f * SceneryLayout.PALM_SCROLL;
+                    java.util.List<SceneryLayout.Palm> palms = SceneryLayout.visiblePalms(
+                            seed, course.getHazards(), left, left + width);
+                    java.util.List<SceneryLayout.Palm> replay = SceneryLayout.visiblePalms(
+                            seed, course.getHazards(), left, left + width);
+                    check(palms.size() == replay.size(),
+                            "palm placement repeats for the same course and viewport");
+                    sawDenseScreen |= palms.size() > 8;
+                    for (int i = 0; i < palms.size(); i++) {
+                        SceneryLayout.Palm palm = palms.get(i);
+                        check(palm.x == replay.get(i).x && palm.view == replay.get(i).view
+                                        && palm.phase == replay.get(i).phase,
+                                "palm appearance and wind phase are seeded");
+                        viewsSeen[palm.view] = true;
+                        groupSizesSeen[SceneryLayout.palmGroupSize(seed,
+                                palm.groupIndex)] = true;
                         for (RunnerEngine.Hazard hazard : course.getHazards()) {
                             if (hazard.type == RunnerEngine.HazardType.HOLE) {
-                                check(x + SceneryLayout.PALM_EXTENT <= hazard.x
-                                                || x - SceneryLayout.PALM_EXTENT >= hazard.end(),
+                                check(palm.x + SceneryLayout.PALM_EXTENT <= hazard.x
+                                                || palm.x - SceneryLayout.PALM_EXTENT
+                                                >= hazard.end(),
                                         "palm canopy stays clear of holes");
                             }
                         }
-                        int view = SceneryLayout.palmView(seed, index);
-                        viewsSeen[view] = true;
-                        float halfRoot = SceneryLayout.palmTrunkWidth(view) / 2f + 1f;
-                        check(!Float.isNaN(course.surfaceYAt(x - halfRoot))
-                                        && !Float.isNaN(course.surfaceYAt(x + halfRoot)),
-                                "palm trunk is supported by terrain");
+                        float halfRoot = SceneryLayout.palmTrunkWidth(palm.view) / 2f + 1f;
+                        check(!Float.isNaN(course.surfaceYAt(palm.x - halfRoot))
+                                        && !Float.isNaN(course.surfaceYAt(palm.x + halfRoot)),
+                                "palm trunk stays supported by terrain");
+                        if (i > 0) {
+                            SceneryLayout.Palm prior = palms.get(i - 1);
+                            float gap = palm.x - prior.x;
+                            if (palm.groupIndex == prior.groupIndex) {
+                                check(gap > 0f && gap < RunnerEngine.WORLD_UNITS_PER_METER,
+                                        "trunks in a group are less than one metre apart");
+                                check(palm.ordinal == prior.ordinal + 1,
+                                        "group members are generated together");
+                            } else if (palm.groupIndex == prior.groupIndex + 1) {
+                                check(gap >= 2f * RunnerEngine.WORLD_UNITS_PER_METER
+                                                && gap <= 15f * RunnerEngine.WORLD_UNITS_PER_METER,
+                                        "adjacent groups stay two to fifteen metres apart");
+                            } else {
+                                skippedGroupAtHole = true;
+                            }
+                        }
                     }
-                    check(visible >= 3 && visible <= 8,
-                            "each scrolling screen contains three to eight palm trees");
                 }
             }
             for (int index = -20; index < 200; index++) {
@@ -160,7 +187,11 @@ public final class RunnerEngineChecks {
         check(tallest - shortest == 5f
                         && SceneryLayout.palmTrunkWidth(0) != SceneryLayout.palmTrunkWidth(1),
                 "the five palm shapes vary in height by at most five pixels and in trunk width");
-        check(movedPalmAwayFromHole, "hole avoidance is exercised by a generated course");
+        for (int size = 1; size <= 5; size++) {
+            check(groupSizesSeen[size], "single palms and all group sizes appear");
+        }
+        check(sawDenseScreen && skippedGroupAtHole,
+                "denser clusters include clear gaps where holes interrupt vegetation");
     }
 
     private static SceneryLayout.GrassSegment grassAt(
@@ -172,35 +203,57 @@ public final class RunnerEngineChecks {
     }
 
     private static void testGrassCoverage() {
-        check(SceneryLayout.GRASS_HEIGHT == RunnerEngine.PLAYER_HEIGHT / 4f,
-                "grass blades are one quarter of the hovercar height");
+        check(SceneryLayout.GRASS_HEIGHT == RunnerEngine.PLAYER_HEIGHT / 3f,
+                "grass blade height is capped at one third of the hovercar height");
         boolean sawHole = false;
         boolean sawGentle = false;
         boolean sawSteep = false;
-        boolean sawWall = false;
-        boolean sawDip = false;
+        boolean sawWallGrass = false;
+        boolean sawDipGrass = false;
+        float shortestPatch = Float.MAX_VALUE;
+        float longestPatch = 0f;
         for (long seed = 0; seed < 40; seed++) {
             RunnerEngine course = new RunnerEngine();
             course.startNewGame(seed);
             course.generateAhead(20_000f);
+            SceneryLayout.GrassPattern pattern = new SceneryLayout.GrassPattern(seed);
+            pattern.generateAhead(20_000f);
+            float previousEnd = Float.NaN;
+            for (SceneryLayout.GrassPatch patch : pattern.patches) {
+                float width = patch.toX - patch.fromX;
+                check(width >= 10f && width <= 150f,
+                        "grass patches are one to fifteen metres wide");
+                shortestPatch = Math.min(shortestPatch, width);
+                longestPatch = Math.max(longestPatch, width);
+                if (!Float.isNaN(previousEnd)) {
+                    check(patch.fromX - previousEnd >= 10f
+                                    && patch.fromX - previousEnd <= 100f,
+                            "the empty space between grass patches is one to ten metres");
+                }
+                previousEnd = patch.toX;
+            }
             for (RunnerEngine.Hazard hazard : course.getHazards()) {
                 java.util.List<SceneryLayout.GrassSegment> grass =
-                        SceneryLayout.visibleGrass(course.getHazards(),
+                        SceneryLayout.visibleGrass(pattern, course.getHazards(),
                                 hazard.x - 20f, hazard.end() + 20f);
-                check(grassAt(grass, hazard.x - 10f) != null
-                                && grassAt(grass, hazard.end() + 10f) != null,
-                        "grass resumes on flat ground beside obstacles");
+                for (SceneryLayout.GrassSegment segment : grass) {
+                    float middle = (segment.fromX + segment.toX) / 2f;
+                    check(!Float.isNaN(course.surfaceYAt(middle))
+                                    && Math.abs(segment.surfaceYAt(middle)
+                                    - course.surfaceYAt(middle)) < .1f,
+                            "grass patches follow a solid terrain surface");
+                }
                 if (hazard.type == RunnerEngine.HazardType.HOLE) {
                     sawHole = true;
                     check(grassAt(grass, (hazard.x + hazard.end()) / 2f) == null,
-                            "grass does not bridge holes");
+                            "grass patches do not bridge holes");
                     continue;
                 }
-                sawWall |= hazard.type == RunnerEngine.HazardType.WALL;
-                sawDip |= hazard.type == RunnerEngine.HazardType.DIP;
                 float flatMiddle = (hazard.flatStart + hazard.flatEnd) / 2f;
-                check(grassAt(grass, flatMiddle) != null,
-                        "grass covers raised ledges and depression floors");
+                if (grassAt(grass, flatMiddle) != null) {
+                    sawWallGrass |= hazard.type == RunnerEngine.HazardType.WALL;
+                    sawDipGrass |= hazard.type == RunnerEngine.HazardType.DIP;
+                }
                 for (int side = 0; side < 2; side++) {
                     int degrees = side == 0 ? hazard.entranceDegrees : hazard.exitDegrees;
                     float from = side == 0 ? hazard.x : hazard.flatEnd;
@@ -210,19 +263,22 @@ public final class RunnerEngineChecks {
                     SceneryLayout.GrassSegment segment = grassAt(grass, middle);
                     if (degrees > 45) {
                         sawSteep = true;
-                        check(segment == null, "grass stops on slopes over 45 degrees");
+                        check(segment == null,
+                                "grass patches stop on slopes over 45 degrees");
                     } else {
-                        sawGentle = true;
-                        check(segment != null
-                                        && Math.abs(segment.surfaceYAt(middle)
-                                        - hazard.surfaceYAt(middle)) < .1f,
-                                "grass follows gentle slopes at the terrain surface");
+                        if (segment != null) {
+                            sawGentle = true;
+                            check(Math.abs(segment.surfaceYAt(middle)
+                                            - hazard.surfaceYAt(middle)) < .1f,
+                                    "grass follows gentle slopes at the terrain surface");
+                        }
                     }
                 }
             }
         }
-        check(sawHole && sawGentle && sawSteep && sawWall && sawDip,
-                "grass rules cover holes, both terrain types, and both incline ranges");
+        check(sawHole && sawGentle && sawSteep && sawWallGrass && sawDipGrass
+                        && shortestPatch < 13f && longestPatch > 145f,
+                "grass patch rules cover all terrain types and the full width range");
     }
 
     private static float horizontalRun(float height, int degrees) {
@@ -2255,12 +2311,24 @@ public final class RunnerEngineChecks {
         check(Math.abs(restored.getPlayerX() - saved.getPlayerX()) < .01f
                         && Math.abs(restored.getPlayerY() - saved.getPlayerY()) < .01f,
                 "a resumed water tap follows the same path as an uninterrupted run");
-        RunnerEngine jumpOver = placedAt(waterSeed, hole.x - 100f,
+        long shortHoleSeed = -1L;
+        RunnerEngine.Hazard shortHole = null;
+        for (long trial = 0; trial < 1000; trial++) {
+            RunnerEngine candidate = started(trial);
+            RunnerEngine.Hazard first = candidate.getHazards().get(0);
+            if (first.type == RunnerEngine.HazardType.HOLE && first.width <= 140f) {
+                shortHoleSeed = trial;
+                shortHole = first;
+                break;
+            }
+        }
+        check(shortHole != null, "some randomized water holes remain jumpable");
+        RunnerEngine jumpOver = placedAt(shortHoleSeed, shortHole.x - 45f,
                 RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
         jumpOver.jump();
-        for (int step = 0; step < 180 && jumpOver.getPlayerX() < hole.end() + 40f;
+        for (int step = 0; step < 180 && jumpOver.getPlayerX() < shortHole.end() + 40f;
                 step++) jumpOver.update(1f / 120f);
-        check(jumpOver.getPlayerX() > hole.end() + 40f
+        check(jumpOver.getPlayerX() > shortHole.end() + 40f
                         && jumpOver.getLives() == RunnerEngine.MAX_LIVES,
                 "a timed jump clears the water-filled hole");
 
@@ -2447,6 +2515,7 @@ public final class RunnerEngineChecks {
             for (int step = 0; step < 30_000 && cleared < 4; ++step) {
                 RunnerEngine.Hazard hazard = game.getHazards().get(cleared);
                 if (game.isWaitingForJump()) game.jump();
+                if (game.isInWater() && step % 12 == 0) game.jump();
                 if (hazard.type != RunnerEngine.HazardType.DIP && !jumped
                         && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= hazard.x - jumpLead(hazard.type)) {
