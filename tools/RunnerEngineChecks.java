@@ -30,7 +30,7 @@ public final class RunnerEngineChecks {
                 game.getDamageRecoverySeconds(), game.getFarthestX(),
                 game.getVisibleWorldWidth(), game.getAntagonistTimers(),
                 game.getProjectileState(), game.getDefeatedAntagonists(),
-                game.getBonusMeters(), game.hasCompletedFirstJump(),
+                game.getBonusPoints(), game.hasCompletedFirstJump(),
                 game.isControlledJumpInProgress());
         check(restored.getMode() == RunnerEngine.Mode.PAUSED
                         && restored.isControlledJumpInProgress()
@@ -1056,7 +1056,7 @@ public final class RunnerEngineChecks {
                 game.getDamageRecoverySeconds(), game.getFarthestX(),
                 game.getVisibleWorldWidth(), game.getAntagonistTimers(),
                 game.getProjectileState(), game.getDefeatedAntagonists(),
-                game.getBonusMeters(), game.hasCompletedFirstJump(),
+                game.getBonusPoints(), game.hasCompletedFirstJump(),
                 game.isControlledJumpInProgress(), game.getAntagonistState(),
                 game.getColoredProjectileState());
         float[] before = enemyStateFor(game, spawnX);
@@ -1089,10 +1089,10 @@ public final class RunnerEngineChecks {
         hit.update(1f / 120f);
         check(hit.getHealth() == RunnerEngine.MAX_HEALTH - 2
                         && hit.getLives() == RunnerEngine.MAX_LIVES
-                        && hit.getBonusMeters() == 1
+                        && hit.getBonusPoints() == 200
                         && hit.getDefeatedAntagonists()[0] == foe.spawnX
                         && hit.getBonusPopups().get(0).type == RunnerEngine.EnemyType.MOVING,
-                "body contact removes red enemy, costs two health and shows red +1");
+                "body contact removes red enemy, costs two health and shows red +200");
         RunnerEngine restoredHit = new RunnerEngine();
         restoredHit.restore(hit.getSeed(), hit.getLives(), hit.getPlayerX(),
                 hit.getPlayerY(), hit.getVelocityY(), hit.getCountdownSeconds(),
@@ -1101,7 +1101,7 @@ public final class RunnerEngineChecks {
                 hit.getDamageRecoverySeconds(), hit.getFarthestX(),
                 hit.getVisibleWorldWidth(), hit.getAntagonistTimers(),
                 hit.getProjectileState(), hit.getDefeatedAntagonists(),
-                hit.getBonusMeters(), hit.hasCompletedFirstJump(),
+                hit.getBonusPoints(), hit.hasCompletedFirstJump(),
                 hit.isControlledJumpInProgress(), hit.getAntagonistState(),
                 hit.getColoredProjectileState());
         restoredHit.generateAhead(45_000f);
@@ -1121,10 +1121,10 @@ public final class RunnerEngineChecks {
         stomp.update(1f / 120f);
         check(stomp.getHealth() == RunnerEngine.MAX_HEALTH
                         && stomp.getLives() == RunnerEngine.MAX_LIVES
-                        && stomp.getBonusMeters() == 2
-                        && stomp.getBonusPopups().get(0).amount == 2
+                        && stomp.getBonusPoints() == 400
+                        && stomp.getBonusPopups().get(0).amount == 400
                         && stomp.getBonusPopups().get(0).type == RunnerEngine.EnemyType.MOVING,
-                "landing on red enemy gives red +2 without damage");
+                "landing on red enemy gives red +400 without damage");
         float[] popupState = stomp.getBonusPopupState();
         RunnerEngine restored = new RunnerEngine();
         restored.restoreBonusPopups(popupState);
@@ -1195,8 +1195,9 @@ public final class RunnerEngineChecks {
                 RunnerEngine.MAX_HEALTH, 0f, 5130f, 960f, null, null, null,
                 3, false, false);
         bonusRun.generateAhead(80_000f);
-        check(bonusRun.getDistance() == 502 && bonusRun.getAntagonists().isEmpty(),
-                "bonus meters do not unlock enemies before 500 physical metres");
+        check(bonusRun.getDistance() == 499 && bonusRun.getScore() == 502
+                        && bonusRun.getAntagonists().isEmpty(),
+                "bonus points do not change physical distance or unlock enemies early");
     }
 
     private static boolean withinTenMetres(float left, float right, float start, float end) {
@@ -1313,16 +1314,17 @@ public final class RunnerEngineChecks {
                         && stomp.getDamageRecoverySeconds() == 0f
                         && stomp.getMode() == RunnerEngine.Mode.RUNNING
                         && stomp.getSpeed() == startingSpeed
-                        && stomp.getBonusMeters() == 2
+                        && stomp.getBonusPoints() == 300
                         && stomp.getDistance() == (int) ((stomp.getFarthestX() - 140f)
-                        / RunnerEngine.WORLD_UNITS_PER_METER) + 2,
-                "stomp awards two bonus metres without changing health, lives or speed");
+                        / RunnerEngine.WORLD_UNITS_PER_METER)
+                        && stomp.getScore() == stomp.getDistance() + 300,
+                "stomp awards 300 points without changing distance, health, lives or speed");
         check(stomp.getBonusPopups().size() == 1
-                        && stomp.getBonusPopups().get(0).amount == 2
+                        && stomp.getBonusPopups().get(0).amount == 300
                         && stomp.getBonusPopups().get(0).type == RunnerEngine.EnemyType.STATIONARY
                         && Math.abs(stomp.getBonusPopups().get(0).x
                         - foe.x - RunnerEngine.PLAYER_WIDTH / 2f) < .01f,
-                "stomp shows a +2 bonus at the orange enemy's position");
+                "stomp shows a +300 bonus at the orange enemy's position");
         stomp.pause();
         stomp.update(.5f);
         check(stomp.getBonusPopups().get(0).getProgress() == 0f,
@@ -1348,9 +1350,9 @@ public final class RunnerEngineChecks {
                         && justBelow.getLives() == RunnerEngine.MAX_LIVES
                         && justBelow.getMode() == RunnerEngine.Mode.RUNNING
                         && justBelow.getPlayerX() > initialX
-                        && justBelow.getBonusMeters() == 1
+                        && justBelow.getBonusPoints() == 100
                         && justBelow.getAntagonists().stream().noneMatch(e -> e.x == lowerFoe.x),
-                "descending contact below the upper quarter costs two health and gives one bonus metre");
+                "descending contact below the upper quarter costs two health and gives 100 points");
     }
 
     private static void testAntagonistAndProjectiles() {
@@ -1370,12 +1372,12 @@ public final class RunnerEngineChecks {
         check(game.getLives() == RunnerEngine.MAX_LIVES
                         && game.getHealth() == RunnerEngine.MAX_HEALTH - 2
                         && game.getMode() == RunnerEngine.Mode.RUNNING
-                        && game.getBonusMeters() == 1,
-                "running into an oval costs two health and awards one bonus metre");
+                        && game.getBonusPoints() == 100,
+                "running into an orange enemy costs two health and awards 100 points");
         check(game.getBonusPopups().size() == 1
-                        && game.getBonusPopups().get(0).amount == 1
+                        && game.getBonusPopups().get(0).amount == 100
                         && game.getBonusPopups().get(0).type == RunnerEngine.EnemyType.STATIONARY,
-                "collision shows a +1 label in the orange enemy's color");
+                "collision shows a +100 label in the orange enemy's color");
         check(game.getPlayerX() > approachX
                         && game.getSpeed() == previousSpeed,
                 "enemy collision does not interrupt movement or reset speed");
@@ -1391,13 +1393,14 @@ public final class RunnerEngineChecks {
                 game.getDamageRecoverySeconds(), game.getFarthestX(),
                 game.getVisibleWorldWidth(), game.getAntagonistTimers(),
                 game.getProjectileState(), game.getDefeatedAntagonists(),
-                game.getBonusMeters(), game.hasCompletedFirstJump(),
+                game.getBonusPoints(), game.hasCompletedFirstJump(),
                 game.isControlledJumpInProgress());
         restoredHit.generateAhead(40_000f);
         check(restoredHit.getMode() == RunnerEngine.Mode.PAUSED
                         && restoredHit.getResumeMode() == RunnerEngine.Mode.RUNNING
-                        && restoredHit.getBonusMeters() == 1
+                        && restoredHit.getBonusPoints() == 100
                         && restoredHit.getDistance() == game.getDistance()
+                        && restoredHit.getScore() == game.getScore()
                         && restoredHit.getAntagonists().stream().noneMatch(e -> e.x == struckEnemyX),
                 "enemy removal and bonus score persist through activity restoration");
         float afterHitX = game.getPlayerX();
@@ -1419,7 +1422,7 @@ public final class RunnerEngineChecks {
         check(lastHealth.getLives() == RunnerEngine.MAX_LIVES - 1
                         && lastHealth.getMode() == RunnerEngine.Mode.COUNTDOWN
                         && lastHealth.getHealth() == RunnerEngine.MAX_HEALTH
-                        && lastHealth.getBonusMeters() == 1,
+                        && lastHealth.getBonusPoints() == 100,
                 "enemy collision depletes health despite projectile recovery and awards its bonus");
 
         RunnerEngine finalLife = enemyOnOpenGround(130f);
@@ -1433,12 +1436,13 @@ public final class RunnerEngineChecks {
         finalLife.continueGame();
         finalLife.update(1f / 120f);
         check(finalLife.getMode() == RunnerEngine.Mode.GAME_OVER
-                        && finalLife.getBonusMeters() == 1
-                        && finalLife.getBestDistance() == finalLife.getDistance(),
+                        && finalLife.getBonusPoints() == 100
+                        && finalLife.getBestDistance() == finalLife.getDistance()
+                        && finalLife.getBestScore() == finalLife.getScore(),
                 "bonus from the final collision counts toward the saved best score");
         finalLife.startNewGame(99L);
-        check(finalLife.getBonusMeters() == 0 && finalLife.getDistance() == 0,
-                "new run resets bonus metres");
+        check(finalLife.getBonusPoints() == 0 && finalLife.getDistance() == 0,
+                "new run resets bonus points");
 
         RunnerEngine shooter = enemyOnOpenGround(260f);
         enemyX = shooter.getAntagonists().stream()
@@ -1727,7 +1731,7 @@ public final class RunnerEngineChecks {
                 active.getDamageRecoverySeconds(), active.getFarthestX(),
                 active.getVisibleWorldWidth(), active.getAntagonistTimers(),
                 active.getProjectileState(), active.getDefeatedAntagonists(),
-                active.getBonusMeters(), active.hasCompletedFirstJump(),
+                active.getBonusPoints(), active.hasCompletedFirstJump(),
                 active.isControlledJumpInProgress(), active.getAntagonistState(),
                 active.getColoredProjectileState());
         RunnerEngine.Antagonist same = saved.getAntagonists().stream()
@@ -1753,6 +1757,164 @@ public final class RunnerEngineChecks {
                 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
         game.continueGame();
         return game;
+    }
+
+    private static void testWaterAndStars() {
+        long waterSeed = seedFor(RunnerEngine.HazardType.HOLE);
+        RunnerEngine course = started(waterSeed);
+        RunnerEngine.Hazard hole = course.getHazards().get(0);
+        float middle = (hole.x + hole.end()) / 2f - RunnerEngine.PLAYER_WIDTH / 2f;
+        RunnerEngine above = placedAt(waterSeed, middle,
+                RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - 2f, 0f);
+        above.update(1f / 120f);
+        check(above.getLives() == RunnerEngine.MAX_LIVES,
+                "hovercar above the waterline remains safe");
+        RunnerEngine drown = placedAt(waterSeed, middle,
+                RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
+        drown.update(1f / 120f);
+        check(drown.getLives() == RunnerEngine.MAX_LIVES - 1
+                        && drown.getMode() == RunnerEngine.Mode.COUNTDOWN,
+                "touching the waterline immediately costs one life");
+        RunnerEngine jumpOver = placedAt(waterSeed, hole.x - 100f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+        jumpOver.jump();
+        for (int step = 0; step < 180 && jumpOver.getPlayerX() < hole.end() + 40f;
+                step++) jumpOver.update(1f / 120f);
+        check(jumpOver.getPlayerX() > hole.end() + 40f
+                        && jumpOver.getLives() == RunnerEngine.MAX_LIVES,
+                "a timed jump clears the water-filled hole");
+
+        RunnerEngine layout = new RunnerEngine();
+        layout.startNewGame(19L);
+        layout.generateAhead(200_000f);
+        int[] unlocks = {200, 400, 600, 800, 1000};
+        int[] points = {10, 20, 30, 40, 50};
+        for (RunnerEngine.StarColor color : RunnerEngine.StarColor.values()) {
+            check(color.unlockMetres == unlocks[color.ordinal()]
+                            && color.points == points[color.ordinal()],
+                    "star color has its requested unlock distance and point value");
+        }
+        boolean[] sawColor = new boolean[RunnerEngine.StarColor.values().length];
+        boolean sawHoleStar = false;
+        boolean sawPlatformStar = false;
+        boolean sawUnderPlatform = false;
+        boolean sawMixedGroup = false;
+        int groupSize = 0;
+        float previousX = Float.NaN;
+        RunnerEngine.StarColor previousColor = null;
+        for (RunnerEngine.Star star : layout.getStars()) {
+            check(star.x >= 140f + 200f * RunnerEngine.WORLD_UNITS_PER_METER,
+                    "stars begin after 200 physical metres");
+            check(star.x >= 140f + star.color.unlockMetres
+                            * RunnerEngine.WORLD_UNITS_PER_METER,
+                    "each color appears only after its unlock distance");
+            sawColor[star.color.ordinal()] = true;
+            if (!Float.isNaN(previousX)) {
+                float gap = star.x - previousX;
+                if (gap > 50f) {
+                    check(groupSize >= 1 && groupSize <= 10
+                                    && gap >= 100f * RunnerEngine.WORLD_UNITS_PER_METER
+                                    && gap <= 750f * RunnerEngine.WORLD_UNITS_PER_METER,
+                            "one to ten stars form groups spaced 100 to 750 metres apart");
+                    groupSize = 0;
+                } else {
+                    check(gap >= 36f && gap <= 48f, "stars in a group have visible spacing");
+                    sawMixedGroup |= previousColor != star.color;
+                }
+            }
+            groupSize++;
+            previousX = star.x;
+            previousColor = star.color;
+
+            float ground = layout.surfaceYAt(star.x);
+            if (Float.isNaN(ground)) {
+                sawHoleStar = true;
+                check(Math.abs(star.bottom() - (RunnerEngine.GROUND_Y
+                                - RunnerEngine.JUMP_HEIGHT)) < .1f,
+                        "star over a hole sits at maximum jump height");
+                continue;
+            }
+            RunnerEngine.Platform overhead = null;
+            for (RunnerEngine.Platform platform : layout.getPlatforms()) {
+                if (platform.x > star.x + RunnerEngine.STAR_RADIUS) break;
+                if (star.x + RunnerEngine.STAR_RADIUS > platform.x
+                        && star.x - RunnerEngine.STAR_RADIUS < platform.end()) {
+                    overhead = platform;
+                    break;
+                }
+            }
+            if (overhead != null && star.bottom() < overhead.top) {
+                sawPlatformStar = true;
+                float height = overhead.top - star.bottom();
+                check(height >= RunnerEngine.PLAYER_HEIGHT / 2f - .1f
+                                && height <= RunnerEngine.JUMP_HEIGHT + .1f,
+                        "star above a platform uses its top as the height reference");
+            } else {
+                float height = ground - star.bottom();
+                check(height >= RunnerEngine.PLAYER_HEIGHT / 2f - .1f
+                                && height <= RunnerEngine.JUMP_HEIGHT + .1f,
+                        "star bottom is between half a car and one jump above terrain");
+                if (overhead != null) {
+                    sawUnderPlatform = true;
+                    check(star.y - RunnerEngine.STAR_RADIUS >= overhead.bottom + 2.9f,
+                            "star beneath a platform fits below its underside");
+                }
+            }
+        }
+        check(groupSize >= 1 && groupSize <= 10, "last star group is bounded");
+        for (boolean seen : sawColor) check(seen, "all five star colors appear after unlock");
+        check(sawHoleStar && sawPlatformStar && sawUnderPlatform && sawMixedGroup,
+                "stars occur over water, above and below platforms, and in mixed groups");
+
+        RunnerEngine incremental = new RunnerEngine();
+        incremental.startNewGame(19L);
+        for (int x = 1000; x <= 200_000; x += 500) incremental.generateAhead(x);
+        check(incremental.getStars().size() == layout.getStars().size(),
+                "generation count does not depend on frame-by-frame lookahead");
+        for (int i = 0; i < layout.getStars().size(); i++) {
+            RunnerEngine.Star a = layout.getStars().get(i);
+            RunnerEngine.Star b = incremental.getStars().get(i);
+            check(a.x == b.x && a.y == b.y && a.color == b.color,
+                    "seed fixes each star's place, height, and color");
+        }
+
+        RunnerEngine.Star target = layout.getStars().stream()
+                .filter(star -> star.color == RunnerEngine.StarColor.BLUE)
+                .findFirst().get();
+        RunnerEngine pickup = placedAt(19L, target.x - RunnerEngine.PLAYER_WIDTH / 2f,
+                target.y - RunnerEngine.PLAYER_HEIGHT / 2f, 0f);
+        int beforeScore = pickup.getScore();
+        int beforeDistance = pickup.getDistance();
+        pickup.update(1f / 120f);
+        check(pickup.getCollectedStars().length >= 1
+                        && pickup.getStarBursts().size() >= 1
+                        && pickup.getBonusPoints() >= target.color.points
+                        && pickup.getScore() > beforeScore
+                        && pickup.getDistance() == beforeDistance,
+                "touching a star removes it, creates a matching firework, and adds points only");
+        check(pickup.getStarBursts().get(0).color == target.color,
+                "firework uses the collected star's color");
+        float[] collected = pickup.getCollectedStars();
+        RunnerEngine resumed = new RunnerEngine();
+        resumed.restore(pickup.getSeed(), pickup.getLives(), pickup.getPlayerX(),
+                pickup.getPlayerY(), pickup.getVelocityY(), pickup.getCountdownSeconds(),
+                pickup.getElapsedRunSeconds(), pickup.getTerrainSpeedMultiplier(),
+                pickup.getMode(), pickup.getResumeMode(), pickup.getHealth(),
+                pickup.getDamageRecoverySeconds(), pickup.getFarthestX(),
+                pickup.getVisibleWorldWidth(), pickup.getAntagonistTimers(),
+                pickup.getProjectileState(), pickup.getDefeatedAntagonists(),
+                pickup.getBonusPoints(), pickup.hasCompletedFirstJump(),
+                pickup.isControlledJumpInProgress(), pickup.getAntagonistState(),
+                pickup.getColoredProjectileState());
+        resumed.restoreCollectedStars(collected);
+        resumed.restoreStarBursts(pickup.getStarBurstState());
+        check(resumed.getScore() == pickup.getScore()
+                        && resumed.getStars().stream().noneMatch(s -> s.x == target.x)
+                        && resumed.getStarBursts().size() == pickup.getStarBursts().size(),
+                "score, collected stars, and in-flight fireworks survive restoration");
+        resumed.continueGame();
+        for (int step = 0; step < 100; step++) resumed.update(1f / 120f);
+        check(resumed.getStarBursts().isEmpty(), "firework particles fade away");
     }
 
     private static void testLongerCourses() {
@@ -1826,6 +1988,7 @@ public final class RunnerEngineChecks {
         testProjectileTerrainCollisions();
         testSuspendedPlatforms();
         testPlatformEnemyPatrolAndRestore();
+        testWaterAndStars();
         testLongerCourses();
         System.out.println("RunnerEngine checks passed");
     }
