@@ -46,6 +46,10 @@ public final class RunnerEngine {
     private static final float SPEED_INTERVAL_SECONDS = 3f;
     private static final float GRAVITY = 1080f;
     private static final float JUMP_VELOCITY = -490f;
+    private static final float WATER_SPEED_FRACTION = .25f;
+    private static final float WATER_SINK_ACCELERATION_FACTOR = 4f;
+    private static final float WATER_TAP_VELOCITY = -70f;
+    private static final float WATER_EXIT_JUMP_VELOCITY = -165f;
     public static final float JUMP_HEIGHT = JUMP_VELOCITY * JUMP_VELOCITY / (2f * GRAVITY);
     private static final float ENEMY_JUMP_VELOCITY =
             JUMP_VELOCITY * .4472136f; // sqrt(.2): 20% of the player's jump height.
@@ -266,6 +270,11 @@ public final class RunnerEngine {
     private double elapsedRunSeconds;
     private float terrainSpeedMultiplier = 1f;
     private boolean waitingForJump;
+    private boolean inWater;
+    private float waterHoleX;
+    private float waterEntrySpeed;
+    private float waterVerticalSpeed;
+    private float waterExitSpeed;
     private int bestDistance;
     private int bestScore;
     private Mode mode = Mode.TITLE;
@@ -314,6 +323,10 @@ public final class RunnerEngine {
         elapsedRunSeconds = 0d;
         terrainSpeedMultiplier = 1f;
         waitingForJump = false;
+        inWater = false;
+        waterEntrySpeed = 0f;
+        waterVerticalSpeed = 0f;
+        waterExitSpeed = 0f;
         generateAhead(1800f);
     }
 
@@ -489,12 +502,18 @@ public final class RunnerEngine {
     }
 
     public void jump() {
+        if (mode == Mode.RUNNING && inWater) {
+            // Short upward strokes counter the speed-dependent downward drift.
+            waterVerticalSpeed = WATER_TAP_VELOCITY;
+            playerY = Math.max(WATER_SURFACE_Y - PLAYER_HEIGHT, playerY - 2f);
+            return;
+        }
         if (mode == Mode.RUNNING && isStanding()) {
             velocityY = JUMP_VELOCITY;
             controlledJumpInProgress = true;
             if (waitingForJump || terrainSpeedMultiplier < 0f) {
                 waitingForJump = false;
-                terrainSpeedMultiplier = 1f;
+                terrainSpeedMultiplier = cruiseSpeed() / getBaseSpeed();
             }
         }
     }
@@ -514,6 +533,7 @@ public final class RunnerEngine {
     }
 
     private boolean isStanding() {
+        if (inWater) return false;
         float feet = playerY + PLAYER_HEIGHT;
         return velocityY >= 0f
                 && Math.abs(feet - surfaceYForPlayer(playerX, feet)) < 1.2f;
@@ -546,6 +566,7 @@ public final class RunnerEngine {
     private boolean advance(float dt) {
         generateAhead(playerX + 1600f);
         damageRecoverySeconds = Math.max(0f, damageRecoverySeconds - dt);
+        if (inWater) return advanceInWater(dt);
         float oldX = playerX;
         float oldFeet = playerY + PLAYER_HEIGHT;
         float oldSurface = surfaceYForPlayer(oldX, oldFeet);
@@ -615,10 +636,8 @@ public final class RunnerEngine {
         }
         stopAtPlatformEdge(oldX);
         farthestX = Math.max(farthestX, playerX);
-        if (touchesWater()) {
-            loseLife();
-            return true;
-        }
+        Hazard waterHole = touchingWaterHole();
+        if (waterHole != null) beginWater(waterHole);
         if (playerY + PLAYER_HEIGHT > GROUND_Y + MAX_TERRAIN_HEIGHT + 17f) {
             loseLife();
             return true;
@@ -652,14 +671,64 @@ public final class RunnerEngine {
         return false;
     }
 
-    private boolean touchesWater() {
-        if (playerY + PLAYER_HEIGHT < WATER_SURFACE_Y) return false;
+    private Hazard touchingWaterHole() {
+        if (playerY + PLAYER_HEIGHT < WATER_SURFACE_Y) return null;
         float center = playerX + PLAYER_WIDTH / 2f;
         for (Hazard hazard : hazards) {
             if (hazard.x > center) break;
-            if (hazard.type == HazardType.HOLE && playerX >= hazard.x
-                    && center < hazard.end()) return true;
+            // The middle of the hull must be above the hole; waiting for its
+            // rear to clear the bank lets slow cars fall far below the water.
+            if (hazard.type == HazardType.HOLE && center >= hazard.x + 4f
+                    && center < hazard.end()) return hazard;
         }
+        return null;
+    }
+
+    private void beginWater(Hazard hole) {
+        waterEntrySpeed = Math.max(0f, getSpeed());
+        inWater = true;
+        waterHoleX = hole.x;
+        waterVerticalSpeed = waterEntrySpeed * WATER_SPEED_FRACTION;
+        // Surface contact starts the swim; the car has not drowned yet.
+        playerY = WATER_SURFACE_Y - PLAYER_HEIGHT;
+        velocityY = 0f;
+    }
+
+    private boolean advanceInWater(float dt) {
+        float oldX = playerX;
+        float drift = waterEntrySpeed * WATER_SPEED_FRACTION;
+        playerX += drift * dt;
+        waterVerticalSpeed = Math.min(drift,
+                waterVerticalSpeed + drift * WATER_SINK_ACCELERATION_FACTOR * dt);
+        playerY = Math.max(WATER_SURFACE_Y - PLAYER_HEIGHT,
+                playerY + waterVerticalSpeed * dt);
+        farthestX = Math.max(farthestX, playerX);
+
+        // The top of the hull disappearing beneath the surface is the fail point.
+        if (playerY >= WATER_SURFACE_Y) {
+            loseLife();
+            return true;
+        }
+        Hazard hole = null;
+        for (Hazard hazard : hazards) {
+            if (hazard.x > waterHoleX + .1f) break;
+            if (hazard.type == HazardType.HOLE && Math.abs(hazard.x - waterHoleX) < .1f) {
+                hole = hazard;
+                break;
+            }
+        }
+        if (hole != null && playerX + PLAYER_WIDTH / 2f >= hole.end()) {
+            inWater = false;
+            waterExitSpeed = drift;
+            terrainSpeedMultiplier = waterExitSpeed / getBaseSpeed();
+            playerY = GROUND_Y - PLAYER_HEIGHT;
+            velocityY = WATER_EXIT_JUMP_VELOCITY;
+            waterVerticalSpeed = 0f;
+        }
+        updateMovingEnemies(dt);
+        if (updateProjectiles(dt)) return true;
+        collectStars();
+        if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
     }
 
@@ -996,27 +1065,36 @@ public final class RunnerEngine {
             terrainSpeedMultiplier = 0f;
             return;
         }
+        float base = cruiseSpeed() / getBaseSpeed();
         int slope = grounded ? slopeDegreesAt(center) : 0;
         if (slope != 0) {
             double angle = Math.toRadians(Math.abs(slope));
             float gravityEffect = GRAVITY * SLOPE_GRAVITY_RESPONSE_SECONDS
                     / getBaseSpeed() * (float) Math.sin(angle);
             float target = slope > 0
-                    ? (float) Math.cos(angle) - gravityEffect
-                    : 1f + gravityEffect;
+                    ? base * (float) Math.cos(angle) - gravityEffect
+                    : base + gravityEffect;
             float response = 1f - (float) Math.exp(-dt / SLOPE_MOMENTUM_SECONDS);
             terrainSpeedMultiplier += (target - terrainSpeedMultiplier) * response;
-        } else if (terrainSpeedMultiplier < 1f) {
-            terrainSpeedMultiplier = Math.min(1f,
+        } else if (terrainSpeedMultiplier < base) {
+            terrainSpeedMultiplier = Math.min(base,
                     terrainSpeedMultiplier + SLOPE_RECOVERY_PER_SECOND * dt);
         } else {
-            terrainSpeedMultiplier = Math.max(1f,
+            terrainSpeedMultiplier = Math.max(base,
                     terrainSpeedMultiplier - SLOPE_RECOVERY_PER_SECOND * dt);
         }
     }
 
+    private float cruiseSpeed() {
+        return waterExitSpeed > 0f ? waterExitSpeed : getBaseSpeed();
+    }
+
     private void loseLife() {
         lives--;
+        inWater = false;
+        waterEntrySpeed = 0f;
+        waterVerticalSpeed = 0f;
+        waterExitSpeed = 0f;
         controlledJumpInProgress = false;
         projectiles.clear();
         if (lives == 0) {
@@ -1352,6 +1430,8 @@ public final class RunnerEngine {
     public float getVelocityY() { return velocityY; }
     /** Nose-up angle for drawing the car; grounded motion follows the terrain. */
     public float getPlayerPitchDegrees() {
+        if (inWater) return (float) Math.toDegrees(Math.atan2(-waterVerticalSpeed,
+                Math.max(1f, getSpeed())));
         if (isStanding()) return slopeDegreesAt(playerX + PLAYER_WIDTH / 2f);
         return (float) Math.toDegrees(Math.atan2(-velocityY, Math.max(1f, Math.abs(getSpeed()))));
     }
@@ -1368,6 +1448,32 @@ public final class RunnerEngine {
     public float getCountdownSeconds() { return countdownSeconds; }
     public double getElapsedRunSeconds() { return elapsedRunSeconds; }
     public float getTerrainSpeedMultiplier() { return terrainSpeedMultiplier; }
+    public boolean isInWater() { return inWater; }
+    /** Water crossing and exit speed are saved separately from terrain momentum. */
+    public float[] getWaterState() {
+        return new float[]{inWater ? 1f : 0f, waterHoleX, waterEntrySpeed,
+                waterVerticalSpeed, waterExitSpeed};
+    }
+
+    public void restoreWaterState(float[] state) {
+        if (state == null || state.length < 5) return;
+        if (state[4] > 0f && Float.isFinite(state[4])) waterExitSpeed = state[4];
+        if (state[0] != 1f) return;
+        for (Hazard hazard : hazards) {
+            if (hazard.type == HazardType.HOLE && Math.abs(hazard.x - state[1]) < .1f
+                    && playerX + PLAYER_WIDTH / 2f >= hazard.x + 4f
+                    && playerX + PLAYER_WIDTH / 2f < hazard.end()
+                    && playerY < WATER_SURFACE_Y
+                    && state[2] > 0f && Float.isFinite(state[2])
+                    && Float.isFinite(state[3])) {
+                inWater = true;
+                waterHoleX = hazard.x;
+                waterEntrySpeed = state[2];
+                waterVerticalSpeed = state[3];
+                return;
+            }
+        }
+    }
     public boolean isWaitingForJump() { return waitingForJump; }
     public void restoreTerrainStop(boolean stopped) {
         waitingForJump = stopped;
@@ -1377,7 +1483,10 @@ public final class RunnerEngine {
         return BASE_SPEED + SPEED_STEP
                 * (int) Math.floor((elapsedRunSeconds + .000001d) / SPEED_INTERVAL_SECONDS);
     }
-    public float getSpeed() { return getBaseSpeed() * terrainSpeedMultiplier; }
+    public float getSpeed() {
+        return inWater ? waterEntrySpeed * WATER_SPEED_FRACTION
+                : getBaseSpeed() * terrainSpeedMultiplier;
+    }
     public float getSpeedMetersPerSecond() { return getSpeed() / WORLD_UNITS_PER_METER; }
     public int getBestDistance() { return bestDistance; }
     public int getBestScore() { return bestScore; }
