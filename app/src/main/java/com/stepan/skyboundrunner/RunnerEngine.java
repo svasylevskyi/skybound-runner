@@ -899,25 +899,12 @@ public final class RunnerEngine {
         waterHoleX = hole.x;
         waterVerticalSpeed = waterEntrySpeed * WATER_SPEED_FRACTION;
         // Surface contact starts the swim; the car has not drowned yet.
+        playerX = Math.min(playerX, hole.end() - PLAYER_WIDTH);
         playerY = WATER_SURFACE_Y - PLAYER_HEIGHT;
         velocityY = 0f;
     }
 
     private boolean advanceInWater(float dt) {
-        float oldX = playerX;
-        float drift = waterEntrySpeed * WATER_SPEED_FRACTION;
-        playerX += drift * dt;
-        waterVerticalSpeed = Math.min(drift,
-                waterVerticalSpeed + drift * WATER_SINK_ACCELERATION_FACTOR * dt);
-        playerY = Math.max(WATER_SURFACE_Y - PLAYER_HEIGHT,
-                playerY + waterVerticalSpeed * dt);
-        farthestX = Math.max(farthestX, playerX);
-
-        // The top of the hull disappearing beneath the surface is the fail point.
-        if (playerY >= WATER_SURFACE_Y) {
-            loseLife();
-            return true;
-        }
         Hazard hole = null;
         for (Hazard hazard : hazards) {
             if (hazard.x > waterHoleX + .1f) break;
@@ -926,7 +913,32 @@ public final class RunnerEngine {
                 break;
             }
         }
-        if (hole != null && playerX + PLAYER_WIDTH / 2f >= hole.end()) {
+        if (hole == null) {
+            // A stale saved crossing must not cost a life without reaching the bottom.
+            inWater = false;
+            waterEntrySpeed = 0f;
+            waterVerticalSpeed = 0f;
+            landAt(GROUND_Y);
+            return false;
+        }
+        float oldX = playerX;
+        float drift = waterEntrySpeed * WATER_SPEED_FRACTION;
+        // The far bank stops horizontal drift, but tapping can still lift the car.
+        playerX = Math.min(hole.end() - PLAYER_WIDTH, playerX + drift * dt);
+        waterVerticalSpeed = Math.min(drift,
+                waterVerticalSpeed + drift * WATER_SINK_ACCELERATION_FACTOR * dt);
+        playerY = Math.max(WATER_SURFACE_Y - PLAYER_HEIGHT,
+                playerY + waterVerticalSpeed * dt);
+        farthestX = Math.max(farthestX, playerX);
+
+        // There is still time to recover until the bottom of the car reaches
+        // the bottom of the screen, including while it is against the far bank.
+        if (playerY + PLAYER_HEIGHT >= WORLD_HEIGHT) {
+            loseLife();
+            return true;
+        }
+        if (playerX + PLAYER_WIDTH >= hole.end() - .01f
+                && playerY <= WATER_SURFACE_Y - PLAYER_HEIGHT + .01f) {
             inWater = false;
             // Resume the entry pace, then the normal slope/three-second speed
             // update eases it toward the current cruising speed.
@@ -1772,10 +1784,11 @@ public final class RunnerEngine {
             if (hazard.type == HazardType.HOLE && Math.abs(hazard.x - state[1]) < .1f
                     && playerX + PLAYER_WIDTH / 2f >= hazard.x + 4f
                     && playerX + PLAYER_WIDTH / 2f < hazard.end()
-                    && playerY < WATER_SURFACE_Y
+                    && playerY + PLAYER_HEIGHT < WORLD_HEIGHT
                     && state[2] > 0f && Float.isFinite(state[2])
                     && Float.isFinite(state[3])) {
                 inWater = true;
+                playerX = Math.min(playerX, hazard.end() - PLAYER_WIDTH);
                 waterHoleX = hazard.x;
                 waterEntrySpeed = state[2];
                 waterVerticalSpeed = state[3];
