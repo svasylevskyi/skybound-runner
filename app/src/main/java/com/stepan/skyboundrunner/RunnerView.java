@@ -134,7 +134,8 @@ public final class RunnerView extends View {
         canvas.save();
         canvas.scale(scale, scale);
         canvas.drawColor(SKY);
-        float cameraX = Math.max(0f, engine.getPlayerX() - logicalWidth * .30f);
+        float cameraX = Math.max(0f,
+                engine.getPlayerX() - logicalWidth * RunnerEngine.CAMERA_FOLLOW_FRACTION);
         engine.generateAhead(cameraX + logicalWidth + 550f);
         drawScenery(canvas, cameraX);
         drawWorld(canvas, cameraX);
