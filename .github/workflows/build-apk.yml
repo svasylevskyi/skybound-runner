@@ -28,7 +28,7 @@ jobs:
       - name: Run game engine checks
         run: |
           mkdir -p build/checks
-          javac -d build/checks app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java tools/RunnerEngineChecks.java
+          javac -d build/checks app/src/main/java/com/stepan/skyboundrunner/RunnerEngine.java app/src/main/java/com/stepan/skyboundrunner/SceneryLayout.java tools/RunnerEngineChecks.java
           java -cp build/checks com.stepan.skyboundrunner.RunnerEngineChecks
 
       - name: Build and verify debug APK
