@@ -698,6 +698,55 @@ public final class RunnerEngineChecks {
                 "the departing motorcycle lands on open ground without losing a life");
     }
 
+    private static void testUphillControlledJumps() {
+        for (RunnerEngine.HazardType type : new RunnerEngine.HazardType[]{
+                RunnerEngine.HazardType.WALL, RunnerEngine.HazardType.DIP}) {
+            long seed = seedForSlopes(type, 65, 65);
+            RunnerEngine.Hazard hazard = started(seed).getHazards().get(0);
+            float start = type == RunnerEngine.HazardType.WALL
+                    ? hazard.x : hazard.flatEnd;
+            float end = type == RunnerEngine.HazardType.WALL
+                    ? hazard.flatStart : hazard.end();
+            float center = (start + end) / 2f;
+            float feet = hazard.surfaceYAt(center);
+            RunnerEngine game = new RunnerEngine();
+            game.restore(seed, RunnerEngine.MAX_LIVES,
+                    center - RunnerEngine.PLAYER_WIDTH / 2f,
+                    feet - RunnerEngine.PLAYER_HEIGHT, 0f, 0f, 30d, 1.6f,
+                    RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            game.restoreAbilityState(grantedAbilities(true, false));
+            game.continueGame();
+            check(game.getSpeed() > RunnerEngine.BASE_SPEED
+                            && game.getPlayerPitchDegrees() > 0f,
+                    "fast uphill test starts on the rising face of " + type);
+
+            game.jump();
+            check(game.isControlledJumpInProgress()
+                            && Math.abs(game.getVelocityY() + 490f) < .01f,
+                    "uphill takeoff uses the regular jump impulse without slope boost: " + type);
+            float highestFeet = feet;
+            for (int i = 0; i < 40; i++) {
+                game.update(1f / 120f);
+                highestFeet = Math.min(highestFeet,
+                        game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT);
+            }
+            check(game.isControlledJumpInProgress(),
+                    "uphill jump remains airborne for a midair second jump: " + type);
+            game.jump();
+            check(game.hasUsedSecondJump() && Math.abs(game.getVelocityY() + 490f) < .01f,
+                    "uphill double jump resets to the regular jump impulse: " + type);
+            for (int i = 0; i < 70; i++) {
+                game.update(1f / 120f);
+                highestFeet = Math.min(highestFeet,
+                        game.getPlayerY() + RunnerEngine.PLAYER_HEIGHT);
+            }
+            check(highestFeet >= feet - 2f * RunnerEngine.JUMP_HEIGHT - 2f
+                            && game.getPlayerY() >= -RunnerEngine.PLAYER_HEIGHT,
+                    "regular and double jumps on " + type
+                            + " uphill remain within two normal jump heights");
+        }
+    }
+
     private static void testHovercarJumpPitch() {
         RunnerEngine game = started(1L);
         check(game.getPlayerPitchDegrees() == 0f, "hovercar is level on flat ground");
@@ -3061,9 +3110,63 @@ public final class RunnerEngineChecks {
                 "shoot-button taps may still lift the player during a water crossing");
     }
 
+    private static void testPlayerShotPaceAndScreenExit() {
+        RunnerEngine game = started(31L);
+        game.restoreAbilityState(grantedAbilities(false, true));
+        check(game.shoot(), "shooting ability launches a projectile");
+        float beforePlayer = game.getPlayerX();
+        float beforeShot = game.getPlayerShots().get(0).getX();
+        game.update(.05f);
+        float playerTravel = game.getPlayerX() - beforePlayer;
+        float shotTravel = game.getPlayerShots().get(0).getX() - beforeShot;
+        check(Math.abs(shotTravel - 3f * playerTravel) < .1f,
+                "player shot travels three times the runner's current speed");
+
+        RunnerEngine accelerating = new RunnerEngine();
+        accelerating.restore(31L, RunnerEngine.MAX_LIVES, 140f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 2.99d, 1f, RunnerEngine.Mode.RUNNING,
+                RunnerEngine.Mode.RUNNING);
+        accelerating.restoreAbilityState(grantedAbilities(false, true));
+        accelerating.continueGame();
+        accelerating.shoot();
+        beforePlayer = accelerating.getPlayerX();
+        beforeShot = accelerating.getPlayerShots().get(0).getX();
+        accelerating.update(.05f);
+        check(accelerating.getBaseSpeed() > RunnerEngine.BASE_SPEED
+                        && Math.abs(accelerating.getPlayerShots().get(0).getX() - beforeShot
+                        - 3f * (accelerating.getPlayerX() - beforePlayer)) < .1f,
+                "shot adjusts to the runner's speed increase while in flight");
+
+        // The camera stays at zero early in the run; a shot is removed when
+        // its trailing edge clears that visible screen boundary.
+        float[] nearEdge = grantedAbilities(false, true);
+        nearEdge = java.util.Arrays.copyOf(nearEdge, 14);
+        nearEdge[12] = game.getVisibleWorldWidth() - 2f;
+        nearEdge[13] = 100f;
+        game.restoreAbilityState(nearEdge);
+        game.update(.05f);
+        check(game.getPlayerShots().isEmpty(),
+                "projectile is removed as soon as it is fully past the visible right edge");
+
+        // Once the camera follows, its world-space right edge changes with x.
+        for (int i = 0; i < 200 && game.getPlayerX() < 400f; i++) {
+            game.update(1f / 120f);
+        }
+        check(game.getPlayerX() >= 400f, "shot test reaches the scrolling camera");
+        nearEdge[12] = game.getPlayerX()
+                - game.getVisibleWorldWidth() * RunnerEngine.CAMERA_FOLLOW_FRACTION
+                + game.getVisibleWorldWidth() - 2f;
+        game.restoreAbilityState(nearEdge);
+        game.update(.05f);
+        check(game.getPlayerShots().isEmpty(),
+                "projectile is also removed at the scrolling screen's right edge");
+    }
+
     public static void main(String[] args) {
         testAbilityPickupAndJump();
         testAbilityDamageAndShooting();
+        testPlayerShotPaceAndScreenExit();
         testLayout();
         testSceneryLayout();
         testGrassCoverage();
@@ -3071,6 +3174,7 @@ public final class RunnerEngineChecks {
         testFirstJumpHint();
         testSlopes();
         testBallisticDepartures();
+        testUphillControlledJumps();
         testHovercarJumpPitch();
         testLandingOnSteepRisingSlopes();
         testLandingAcrossShortRisingSlopes();

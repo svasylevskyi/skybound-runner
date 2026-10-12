@@ -20,6 +20,7 @@ public final class RunnerEngine {
     public static final float STAR_RADIUS = 11f;
     public static final float ABILITY_RADIUS = STAR_RADIUS * 1.5f;
     public static final float PLAYER_SHOT_RADIUS = 5f;
+    public static final float CAMERA_FOLLOW_FRACTION = .30f;
     public static final float WATER_SURFACE_Y = GROUND_Y + 2f;
     // Muzzle position relative to the enemy's 32 x 46 collision bounds.
     public static final float MUZZLE_X = -2f;
@@ -45,7 +46,7 @@ public final class RunnerEngine {
     private static final float LIFE_LOSS_BLINK_INTERVAL = .06f;
     private static final float SHOT_INTERVAL_SECONDS = 1.5f;
     private static final float SHOT_SPEED = 380f;
-    private static final float PLAYER_SHOT_SPEED = 560f;
+    private static final float PLAYER_SHOT_SPEED_MULTIPLIER = 3f;
     private static final float ABILITY_REAPPEAR_DISTANCE = 500f * WORLD_UNITS_PER_METER;
     private static final float SHOT_BOUNCE_VELOCITY = -200f;
     public static final float BASE_SPEED = 235f;
@@ -852,7 +853,12 @@ public final class RunnerEngine {
             }
             float takeoffSpeed = getSpeed();
             int slope = supportSlopeDegrees(playerX, playerY + PLAYER_HEIGHT);
-            velocityY = JUMP_VELOCITY + slopeLaunchVelocity(takeoffSpeed, slope);
+            // An uphill tangent is already reflected in the run along the slope.
+            // Adding its upward component here would amplify the controlled jump,
+            // especially at high speeds or before a second jump. Downhill momentum
+            // still carries into the jump, as it does when leaving a slope's edge.
+            velocityY = JUMP_VELOCITY
+                    + Math.max(0f, slopeLaunchVelocity(takeoffSpeed, slope));
             airborneSpeed = takeoffSpeed;
             airborneMomentum = true;
             controlledJumpInProgress = true;
@@ -1463,9 +1469,19 @@ public final class RunnerEngine {
     }
 
     private void updatePlayerShots(float dt) {
+        float screenRight = Math.max(0f,
+                playerX - visibleWorldWidth * CAMERA_FOLLOW_FRACTION) + visibleWorldWidth;
+        float exitX = screenRight + PLAYER_SHOT_RADIUS;
+        // Follow the runner's current speed even as it changes on a slope or
+        // every three seconds. A shot always moves forward or waits at a stop.
+        float shotSpeed = PLAYER_SHOT_SPEED_MULTIPLIER * Math.max(0f, getSpeed());
         for (int i = playerShots.size() - 1; i >= 0; i--) {
             PlayerShot shot = playerShots.get(i);
-            float end = shot.x + PLAYER_SHOT_SPEED * dt;
+            if (shot.x >= exitX) {
+                playerShots.remove(i);
+                continue;
+            }
+            float end = Math.min(exitX, shot.x + shotSpeed * dt);
             boolean consumed = false;
             // Small steps catch thin faces and a moving enemy without tunneling.
             while (shot.x < end && !consumed) {
@@ -1490,7 +1506,7 @@ public final class RunnerEngine {
                     }
                 }
             }
-            if (consumed || shot.x > playerX + visibleWorldWidth + 100f) {
+            if (consumed || shot.x >= exitX) {
                 playerShots.remove(i);
             }
         }
