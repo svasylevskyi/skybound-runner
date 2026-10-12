@@ -25,9 +25,8 @@ public final class RunnerView extends View {
     private static final int SAND_DEPTH = Color.rgb(239, 180, 114);
     private static final int SAND_GRAIN_LIGHT = Color.argb(88, 255, 246, 199);
     private static final int SAND_GRAIN_DARK = Color.argb(82, 205, 145, 86);
-    private static final int STONE_FILL = Color.rgb(255, 213, 145);
-    private static final int STONE_OUTLINE = Color.rgb(210, 123, 61);
-    private static final float STONE_SIDE = RunnerEngine.PLAYER_HEIGHT * 2f / 3f;
+    private static final int GROUND_LINE = Color.rgb(210, 123, 61);
+    private static final float GROUND_LINE_WIDTH = RunnerEngine.PLAYER_HEIGHT / 6f;
     private static final int WATER = Color.rgb(36, 140, 213);
     private static final int WATER_EDGE = Color.rgb(171, 239, 255);
     private static final int FAR_CITY = Color.rgb(119, 160, 187);
@@ -78,6 +77,7 @@ public final class RunnerView extends View {
     private final Path grassPath = new Path();
     private final Path waterPath = new Path();
     private final Path starPath = new Path();
+    private final Path groundPath = new Path();
     private final Shader sandShader = new LinearGradient(0f, RunnerEngine.GROUND_Y,
             0f, RunnerEngine.WORLD_HEIGHT, SAND_SURFACE, SAND_DEPTH,
             Shader.TileMode.CLAMP);
@@ -284,7 +284,7 @@ public final class RunnerView extends View {
         }
         paint.setShader(null);
         drawSandGrains(canvas, cameraX, right);
-        drawSurfaceStones(canvas, cameraX, right);
+        drawGroundContour(canvas, cameraX, right);
         // Water over the submerged hull is translucent during a crossing.
         if (engine.isInWater()) drawHovercar(canvas);
         drawWater(canvas, cameraX, right);
@@ -330,12 +330,12 @@ public final class RunnerView extends View {
                     0x4BD37C9105AA6E28L);
             float surface = engine.surfaceYAt(x);
             if (Float.isNaN(surface)) continue;
-            for (int row = (int) Math.ceil((surface + STONE_SIDE + 5f) / 14f);
+            for (int row = (int) Math.ceil((surface + 12f) / 14f);
                     row * 14f < RunnerEngine.WORLD_HEIGHT; row++) {
                 int id = column * 1049 + row;
                 float y = row * 14f + 4f * SceneryLayout.random01(seed, id,
                         0x1CFB470D9A552E63L);
-                if (y <= surface + STONE_SIDE + 4f) continue;
+                if (y <= surface + 12f) continue;
                 paint.setColor(SceneryLayout.random01(seed, id,
                         0x7316E9A4B50DC728L) < .5f
                         ? SAND_GRAIN_LIGHT : SAND_GRAIN_DARK);
@@ -358,89 +358,105 @@ public final class RunnerView extends View {
         }
     }
 
-    private void drawSurfaceStones(Canvas canvas, float left, float right) {
-        float step = STONE_SIDE + 2f;
-        for (int index = (int) Math.floor(left / step) - 1;
-                index <= (int) Math.ceil(right / step) + 1; index++) {
-            float x = index * step + STONE_SIDE / 2f;
-            float start = engine.surfaceYAt(x - STONE_SIDE / 2f);
-            float end = engine.surfaceYAt(x + STONE_SIDE / 2f);
-            float surface = engine.surfaceYAt(x);
-            if (Float.isNaN(start) || Float.isNaN(end) || Float.isNaN(surface)) continue;
-            float angle = (float) Math.toDegrees(Math.atan2(end - start, STONE_SIDE));
-            // A vertical face or terrain corner is not a continuous top surface.
-            if (Math.abs(angle) > 65f
-                    || Math.abs(surface - (start + end) / 2f) > 3f) {
-                continue;
-            }
-            canvas.save();
-            canvas.translate(x, surface);
-            canvas.rotate(angle);
-            drawStone(canvas, -STONE_SIDE / 2f, 0f);
-            canvas.restore();
-        }
-        for (RunnerEngine.Hazard hazard : engine.getHazards()) {
-            if (hazard.type == RunnerEngine.HazardType.HOLE) continue;
-            if (hazard.x > right + STONE_SIDE) break;
-            if (hazard.end() < left - STONE_SIDE) continue;
-            float flatY = hazard.type == RunnerEngine.HazardType.WALL
-                    ? RunnerEngine.GROUND_Y - hazard.height
-                    : RunnerEngine.GROUND_Y + hazard.height;
-            float faceTop = Math.min(flatY, RunnerEngine.GROUND_Y);
-            if (hazard.entranceDegrees == 90) {
-                drawVerticalStones(canvas, hazard.x, faceTop, hazard.height,
-                        hazard.type == RunnerEngine.HazardType.DIP);
-            } else if (hazard.entranceDegrees > 65) {
-                drawSteepSlopeStones(canvas, hazard.x, RunnerEngine.GROUND_Y,
-                        hazard.flatStart, flatY, left, right);
-            }
-            if (hazard.exitDegrees == 90) {
-                drawVerticalStones(canvas, hazard.end(), faceTop, hazard.height,
-                        hazard.type == RunnerEngine.HazardType.WALL);
-            } else if (hazard.exitDegrees > 65) {
-                drawSteepSlopeStones(canvas, hazard.flatEnd, flatY,
-                        hazard.end(), RunnerEngine.GROUND_Y, left, right);
-            }
-        }
-    }
-
-    private void drawSteepSlopeStones(Canvas canvas, float fromX, float fromY,
-                                      float toX, float toY, float left, float right) {
-        float dx = toX - fromX;
-        float dy = toY - fromY;
-        float length = (float) Math.hypot(dx, dy);
-        float angle = (float) Math.toDegrees(Math.atan2(dy, dx));
-        for (float along = STONE_SIDE / 2f;
-                along <= length - STONE_SIDE / 2f; along += STONE_SIDE + 2f) {
-            float x = fromX + dx * along / length;
-            if (x < left - STONE_SIDE || x > right + STONE_SIDE) continue;
-            canvas.save();
-            canvas.translate(x, fromY + dy * along / length);
-            canvas.rotate(angle);
-            drawStone(canvas, -STONE_SIDE / 2f, 0f);
-            canvas.restore();
-        }
-    }
-
-    private void drawVerticalStones(Canvas canvas, float x, float top, float height,
-                                    boolean bodyToLeft) {
-        float bottom = top + height;
-        for (float y = top + 1f; y + STONE_SIDE <= bottom + 1f; y += STONE_SIDE + 2f) {
-            drawStone(canvas, bodyToLeft ? x - STONE_SIDE : x, y);
-        }
-    }
-
-    private void drawStone(Canvas canvas, float left, float top) {
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(STONE_FILL);
-        canvas.drawRoundRect(left, top, left + STONE_SIDE, top + STONE_SIDE,
-                3.5f, 3.5f, paint);
+    private void drawGroundContour(Canvas canvas, float left, float right) {
+        // Extra off-screen space keeps the seed-based bumps stable at the camera edges.
+        float from = Math.max(0f, left - 24f);
+        float to = right + 24f;
+        float cursor = from;
+        long seed = engine.getSeed();
         paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(1.8f);
-        paint.setColor(STONE_OUTLINE);
-        canvas.drawRoundRect(left, top, left + STONE_SIDE, top + STONE_SIDE,
-                3.5f, 3.5f, paint);
+        paint.setStrokeWidth(GROUND_LINE_WIDTH);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setColor(GROUND_LINE);
+        for (RunnerEngine.Hazard hazard : engine.getHazards()) {
+            if (hazard.end() <= from) continue;
+            if (hazard.x >= to) break;
+            if (hazard.x > cursor) {
+                drawGroundSegment(canvas, cursor, RunnerEngine.GROUND_Y,
+                        Math.min(hazard.x, to), RunnerEngine.GROUND_Y, from, to, seed);
+            }
+            if (hazard.type != RunnerEngine.HazardType.HOLE) {
+                float flatY = RunnerEngine.GROUND_Y
+                        + (hazard.type == RunnerEngine.HazardType.WALL
+                        ? -hazard.height : hazard.height);
+                if (hazard.entranceDegrees == 90) {
+                    drawGroundFace(canvas, hazard.x, RunnerEngine.GROUND_Y,
+                            flatY, hazard.type == RunnerEngine.HazardType.WALL ? 1f : -1f,
+                            from, to, seed);
+                } else {
+                    drawGroundSegment(canvas, hazard.x, RunnerEngine.GROUND_Y,
+                            hazard.flatStart, flatY, from, to, seed);
+                }
+                drawGroundSegment(canvas, hazard.flatStart, flatY,
+                        hazard.flatEnd, flatY, from, to, seed);
+                if (hazard.exitDegrees == 90) {
+                    drawGroundFace(canvas, hazard.end(), flatY,
+                            RunnerEngine.GROUND_Y,
+                            hazard.type == RunnerEngine.HazardType.WALL ? -1f : 1f,
+                            from, to, seed);
+                } else {
+                    drawGroundSegment(canvas, hazard.flatEnd, flatY,
+                            hazard.end(), RunnerEngine.GROUND_Y, from, to, seed);
+                }
+            }
+            cursor = Math.max(cursor, hazard.end());
+        }
+        if (cursor < to) {
+            drawGroundSegment(canvas, cursor, RunnerEngine.GROUND_Y,
+                    to, RunnerEngine.GROUND_Y, from, to, seed);
+        }
         paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawGroundSegment(Canvas canvas, float startX, float startY,
+                                   float endX, float endY, float left, float right,
+                                   long seed) {
+        if (endX <= left || startX >= right || endX <= startX) return;
+        float length = (float) Math.hypot(endX - startX, endY - startY);
+        float visibleStart = Math.max(startX, left);
+        float visibleEnd = Math.min(endX, right);
+        float first = length * (visibleStart - startX) / (endX - startX);
+        float last = length * (visibleEnd - startX) / (endX - startX);
+        groundPath.rewind();
+        groundPath.moveTo(visibleStart, groundLineY(startY, endY, first, length,
+                startX, seed));
+        for (int sample = (int) Math.floor(first / 8f) + 1;
+                sample * 8f < last; sample++) {
+            float along = sample * 8f;
+            float x = startX + (endX - startX) * along / length;
+            groundPath.lineTo(x, groundLineY(startY, endY, along, length,
+                    startX, seed));
+        }
+        groundPath.lineTo(visibleEnd, groundLineY(startY, endY, last, length,
+                startX, seed));
+        canvas.drawPath(groundPath, paint);
+    }
+
+    private float groundLineY(float startY, float endY, float along,
+                              float length, float startX, long seed) {
+        float taper = Math.min(1f, Math.min(along, length - along) / 14f);
+        float bump = SceneryLayout.groundBump(seed, startX + along) * taper;
+        return startY + (endY - startY) * along / length
+                + GROUND_LINE_WIDTH / 2f - bump;
+    }
+
+    private void drawGroundFace(Canvas canvas, float x, float startY, float endY,
+                                float solidSide, float left, float right, long seed) {
+        if (x < left || x > right) return;
+        float height = Math.abs(endY - startY);
+        float direction = Math.signum(endY - startY);
+        long faceSeed = seed ^ ((long) Float.floatToIntBits(x) << 32);
+        groundPath.rewind();
+        groundPath.moveTo(x + solidSide * GROUND_LINE_WIDTH / 2f, startY);
+        for (float along = 8f; along < height; along += 8f) {
+            float taper = Math.min(1f, Math.min(along, height - along) / 14f);
+            float bump = SceneryLayout.groundBump(faceSeed, startY + direction * along);
+            groundPath.lineTo(x + solidSide * (GROUND_LINE_WIDTH / 2f - bump * taper),
+                    startY + direction * along);
+        }
+        groundPath.lineTo(x + solidSide * GROUND_LINE_WIDTH / 2f, endY);
+        canvas.drawPath(groundPath, paint);
     }
 
     private int starColor(RunnerEngine.StarColor color) {

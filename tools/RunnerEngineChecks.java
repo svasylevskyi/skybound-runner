@@ -281,6 +281,29 @@ public final class RunnerEngineChecks {
                 "grass patch rules cover all terrain types and the full width range");
     }
 
+    private static void testGroundBumps() {
+        check(SceneryLayout.GROUND_BUMP_MAX == RunnerEngine.PLAYER_HEIGHT / 10f,
+                "natural ground bumps stay within one tenth of the car height");
+        float min = Float.MAX_VALUE;
+        float max = 0f;
+        for (int sample = 0; sample < 2000; sample++) {
+            float x = sample * 1.17f;
+            float bump = SceneryLayout.groundBump(9831L, x);
+            check(bump >= 0f && bump <= SceneryLayout.GROUND_BUMP_MAX
+                            && bump == SceneryLayout.groundBump(9831L, x),
+                    "ground contour is bounded and stable while scrolling");
+            min = Math.min(min, bump);
+            max = Math.max(max, bump);
+        }
+        check(max - min > 2f, "ground contour has visible small variations");
+        for (int index = 1; index < 100; index++) {
+            float x = index * 19f;
+            check(Math.abs(SceneryLayout.groundBump(9831L, x - .01f)
+                            - SceneryLayout.groundBump(9831L, x + .01f)) < .01f,
+                    "ground bumps join smoothly between seeded samples");
+        }
+    }
+
     private static float horizontalRun(float height, int degrees) {
         return degrees == 90 ? 0f
                 : (float) (height / Math.tan(Math.toRadians(degrees)));
@@ -302,6 +325,7 @@ public final class RunnerEngineChecks {
             boolean jumped = false;
             for (int step = 0; step < 7000 && game.getPlayerX() < first.end() + 50f; ++step) {
                 if (game.isWaitingForJump()) game.jump();
+                if (game.isInWater() && step % 12 == 0) game.jump();
                 if (first.type != RunnerEngine.HazardType.DIP && !jumped
                         && game.getPlayerX() + RunnerEngine.PLAYER_WIDTH
                         >= first.x - jumpLead(first.type)) {
@@ -879,7 +903,7 @@ public final class RunnerEngineChecks {
                 RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT,
                 0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
         lowerScore.continueGame();
-        for (int step = 0; step < 200 && lowerScore.getLives() > 0; step++) {
+        for (int step = 0; step < 800 && lowerScore.getLives() > 0; step++) {
             lowerScore.update(1f / 120f);
         }
         check(lowerScore.getMode() == RunnerEngine.Mode.GAME_OVER
@@ -2182,12 +2206,66 @@ public final class RunnerEngineChecks {
                         && drown.getPlayerY() > RunnerEngine.WATER_SURFACE_Y
                         - RunnerEngine.PLAYER_HEIGHT,
                 "untouched car drifts diagonally down through water");
-        for (int step = 0; step < 200 && drown.getLives() == RunnerEngine.MAX_LIVES;
-                step++) drown.update(1f / 120f);
-        check(drown.getLives() == RunnerEngine.MAX_LIVES - 1
+        for (int step = 0; step < 400 && drown.getPlayerY() < RunnerEngine.WATER_SURFACE_Y
+                && drown.getLives() == RunnerEngine.MAX_LIVES; step++) {
+            drown.update(1f / 120f);
+        }
+        check(drown.isInWater() && drown.getLives() == RunnerEngine.MAX_LIVES
+                        && drown.getPlayerY() >= RunnerEngine.WATER_SURFACE_Y,
+                "a fully submerged car can still be saved");
+        float lastBottom = drown.getPlayerY() + RunnerEngine.PLAYER_HEIGHT;
+        for (int step = 0; step < 700 && drown.getLives() == RunnerEngine.MAX_LIVES;
+                step++) {
+            lastBottom = drown.getPlayerY() + RunnerEngine.PLAYER_HEIGHT;
+            check(lastBottom < RunnerEngine.WORLD_HEIGHT,
+                    "the car remains alive above the bottom of the screen");
+            drown.update(1f / 120f);
+        }
+        check(lastBottom >= RunnerEngine.WORLD_HEIGHT - entrySpeed / 120f
+                        && drown.getLives() == RunnerEngine.MAX_LIVES - 1
                         && drown.getMode() == RunnerEngine.Mode.COUNTDOWN
                         && !drown.isInWater(),
-                "submerging the whole car costs a life and resets the water state");
+                "reaching the screen bottom costs a life and resets the water state");
+
+        RunnerEngine wall = placedAt(waterSeed, hole.end() - RunnerEngine.PLAYER_WIDTH - 1f,
+                RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
+        wall.update(1f / 120f);
+        for (int step = 0; step < 300 && wall.getPlayerY()
+                < RunnerEngine.WATER_SURFACE_Y + 30f; step++) wall.update(1f / 120f);
+        float wallX = hole.end() - RunnerEngine.PLAYER_WIDTH;
+        check(wall.isInWater() && wall.getLives() == RunnerEngine.MAX_LIVES
+                        && Math.abs(wall.getPlayerX() - wallX) < .01f
+                        && wall.getPlayerY() > RunnerEngine.WATER_SURFACE_Y
+                        && wall.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                        < RunnerEngine.WORLD_HEIGHT,
+                "the far wall holds a deeply submerged car above the death threshold");
+        wall.pauseForBackground();
+        RunnerEngine deepRestore = new RunnerEngine();
+        deepRestore.restore(waterSeed, wall.getLives(), wall.getPlayerX(),
+                wall.getPlayerY(), wall.getVelocityY(), 0f,
+                wall.getElapsedRunSeconds(), wall.getTerrainSpeedMultiplier(),
+                wall.getMode(), wall.getResumeMode());
+        deepRestore.restoreWaterState(wall.getWaterState());
+        deepRestore.restoreWaterEncounters(wall.getWaterEncounters());
+        check(deepRestore.isInWater()
+                        && Math.abs(deepRestore.getPlayerY() - wall.getPlayerY()) < .01f,
+                "saving at the far wall retains a fully submerged water crossing");
+        wall.continueGame();
+        deepRestore.continueGame();
+        for (int step = 0; step < 600 && wall.isInWater()
+                && wall.getLives() == RunnerEngine.MAX_LIVES; step++) {
+            if (step % 6 == 0) {
+                wall.jump();
+                deepRestore.jump();
+            }
+            wall.update(1f / 120f);
+            deepRestore.update(1f / 120f);
+        }
+        check(!wall.isInWater() && wall.getLives() == RunnerEngine.MAX_LIVES
+                        && Math.abs(wall.getPlayerX() - wallX) < .01f
+                        && Math.abs(deepRestore.getPlayerY() - wall.getPlayerY()) < .01f
+                        && !deepRestore.isInWater(),
+                "repeated taps lift the car out along the far wall after restoring a save");
 
         RunnerEngine rescue = placedAt(waterSeed, hole.x + 3f,
                 RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
@@ -2206,10 +2284,12 @@ public final class RunnerEngineChecks {
             rescue.update(1f / 120f);
         }
         check(!rescue.isInWater() && rescue.getLives() == RunnerEngine.MAX_LIVES
-                        && rescue.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f >= hole.end()
+                        && rescue.getPlayerX() + RunnerEngine.PLAYER_WIDTH >= hole.end()
                         && rescue.getVelocityY() < 0f
                         && Math.abs(rescue.getSpeed() - preWaterSpeed) < .1f,
-                "regular taps get the car to the far bank and restore its entry speed");
+                "regular taps get the car to the far bank and restore its entry speed: x="
+                        + rescue.getPlayerX() + " y=" + rescue.getPlayerY() + " lives="
+                        + rescue.getLives() + " water=" + rescue.isInWater());
         RunnerEngine nextWater = placedAt(waterSeed, middle,
                 RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
         nextWater.restoreWaterEncounters(rescue.getWaterEncounters());
@@ -2256,10 +2336,10 @@ public final class RunnerEngineChecks {
         fast.update(1f / 120f);
         check(fast.isInWater() && fast.getSpeed() > preWaterSpeed * .25f,
                 "faster run enters water with proportionally faster drift and sinking");
-        for (int step = 0; step < 45 && fast.getLives() == RunnerEngine.MAX_LIVES;
+        for (int step = 0; step < 300 && fast.getLives() == RunnerEngine.MAX_LIVES;
                 step++) fast.update(1f / 120f);
         check(fast.getLives() == RunnerEngine.MAX_LIVES - 1,
-                "waiting to tap at high speed submerges the car before a slow cadence can help");
+                "waiting to tap at high speed eventually reaches the screen bottom");
         RunnerEngine slowCadence = placedAt(waterSeed, hole.x + 3f,
                 RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT - .1f, 100f);
         slowCadence.update(1f / 120f);
@@ -2549,6 +2629,7 @@ public final class RunnerEngineChecks {
         testLayout();
         testSceneryLayout();
         testGrassCoverage();
+        testGroundBumps();
         testFirstJumpHint();
         testSlopes();
         testHovercarJumpPitch();

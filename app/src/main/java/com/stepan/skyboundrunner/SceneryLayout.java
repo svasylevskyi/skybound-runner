@@ -12,6 +12,7 @@ final class SceneryLayout {
     static final float PALM_EXTENT = 75f;
     static final float PALM_GROUP_STEP = 98f;
     static final float GRASS_HEIGHT = RunnerEngine.PLAYER_HEIGHT / 3f;
+    static final float GROUND_BUMP_MAX = RunnerEngine.PLAYER_HEIGHT / 10f;
     private static final float HOLE_CLEARANCE = PALM_EXTENT + 2f;
     private static final float[] PALM_HEIGHTS = {111f, 112f, 113f, 114f, 116f};
     private static final float[] PALM_TRUNKS = {5f, 6.5f, 4.5f, 7f, 5.5f};
@@ -222,6 +223,17 @@ final class SceneryLayout {
     static float palmHeight(int view) { return PALM_HEIGHTS[view]; }
     static float palmTrunkWidth(int view) { return PALM_TRUNKS[view]; }
     static float palmLean(int view) { return PALM_LEANS[view]; }
+
+    /** Smooth seeded surface variation, always within one tenth of the car height. */
+    static float groundBump(long seed, float along) {
+        float sample = along / 19f;
+        int index = (int) Math.floor(sample);
+        float blend = sample - index;
+        blend = blend * blend * (3f - 2f * blend);
+        float a = random01(seed, index, 0xC19B28D37F5A904EL);
+        float b = random01(seed, index + 1, 0xC19B28D37F5A904EL);
+        return GROUND_BUMP_MAX * (a + (b - a) * blend);
+    }
 
     static float buildingWidth(long seed, int index, boolean near) {
         int gap = 1 + (int) (random01(seed, index,
