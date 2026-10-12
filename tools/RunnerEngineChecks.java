@@ -932,7 +932,10 @@ public final class RunnerEngineChecks {
             game.generateAhead(40_000f);
             for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
                 if (foe.platform == null
-                        && openGround(game, foe.x - lead - 10f, foe.x + 16f)) {
+                        && openGround(game, foe.x - lead - 10f, foe.x + 16f)
+                        && game.getStars().stream().noneMatch(star ->
+                                star.x > foe.x - lead - 30f
+                                        && star.x < foe.x + 60f)) {
                     float enemyX = foe.x;
                     game.restore(seed, RunnerEngine.MAX_LIVES, enemyX - lead,
                             RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
@@ -982,10 +985,12 @@ public final class RunnerEngineChecks {
 
     private static float[] enemyStateFor(RunnerEngine game, float spawnX) {
         float[] state = game.getAntagonistState();
-        for (int i = 0; i + 8 < state.length; i += 9) {
+        int stride = state.length > 0 && state[0] == -2f ? 11 : 9;
+        for (int i = stride == 11 ? 1 : 0; i + stride - 1 < state.length;
+                i += stride) {
             if (Math.abs(state[i] - spawnX) < .1f) {
-                float[] oneEnemy = new float[9];
-                System.arraycopy(state, i, oneEnemy, 0, 9);
+                float[] oneEnemy = new float[stride];
+                System.arraycopy(state, i, oneEnemy, 0, stride);
                 return oneEnemy;
             }
         }
@@ -1092,6 +1097,8 @@ public final class RunnerEngineChecks {
                         && hit.getLives() == RunnerEngine.MAX_LIVES
                         && hit.getBonusPoints() == 200
                         && hit.getDefeatedAntagonists()[0] == foe.spawnX
+                        && hit.getEnemyBursts().size() == 1
+                        && hit.getEnemyBursts().get(0).type == RunnerEngine.EnemyType.MOVING
                         && hit.getBonusPopups().get(0).type == RunnerEngine.EnemyType.MOVING,
                 "body contact removes red enemy, costs two health and shows red +200");
         RunnerEngine restoredHit = new RunnerEngine();
@@ -1124,6 +1131,8 @@ public final class RunnerEngineChecks {
                         && stomp.getLives() == RunnerEngine.MAX_LIVES
                         && stomp.getBonusPoints() == 400
                         && stomp.getBonusPopups().get(0).amount == 400
+                        && stomp.getEnemyBursts().size() == 1
+                        && stomp.getEnemyBursts().get(0).type == RunnerEngine.EnemyType.MOVING
                         && stomp.getBonusPopups().get(0).type == RunnerEngine.EnemyType.MOVING,
                 "landing on red enemy gives red +400 without damage");
         float[] popupState = stomp.getBonusPopupState();
@@ -1160,16 +1169,15 @@ public final class RunnerEngineChecks {
                 float center = foe.x + RunnerEngine.PLAYER_WIDTH / 2f;
                 float surface = surfaceAt(game, center);
                 float support = foe.platform == null ? surface : foe.platform.top;
-                check(!Float.isNaN(surface)
+                check((foe.platform != null || !Float.isNaN(surface))
                                 && Math.abs(foe.y + RunnerEngine.PLAYER_HEIGHT - support) < .1f,
-                        "enemy stands on ground or a suspended platform, not in a hole");
+                        "enemy stands on ground or a suspended platform, including over water");
                 if (foe.platform != null) {
                     sawPlatform = true;
-                    float patrol = foe.type == RunnerEngine.EnemyType.MOVING ? 50f : 0f;
-                    check(foe.spawnX - patrol >= foe.platform.x + 100f
-                                    && foe.spawnX + RunnerEngine.PLAYER_WIDTH + patrol
-                                    <= foe.platform.end() - 100f,
-                            "platform enemy and patrol stay ten metres from both edges");
+                    check(foe.spawnX >= foe.platform.x
+                                    && foe.spawnX + RunnerEngine.PLAYER_WIDTH
+                                    <= foe.platform.end(),
+                            "platform enemy spawns fully on its platform");
                     lastX = foe.x;
                     continue;
                 }
@@ -1216,6 +1224,7 @@ public final class RunnerEngineChecks {
                     0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
             game.generateAhead(80_000f);
             for (RunnerEngine.Antagonist foe : game.getAntagonists()) {
+                if (foe.platform != null) continue;
                 float patrol = foe.type == RunnerEngine.EnemyType.MOVING
                         ? 5f * RunnerEngine.WORLD_UNITS_PER_METER : 0f;
                 if (patrol > 0f) checkedMoving++;
@@ -1323,6 +1332,9 @@ public final class RunnerEngineChecks {
         check(stomp.getBonusPopups().size() == 1
                         && stomp.getBonusPopups().get(0).amount == 300
                         && stomp.getBonusPopups().get(0).type == RunnerEngine.EnemyType.STATIONARY
+                        && stomp.getEnemyBursts().size() == 1
+                        && stomp.getEnemyBursts().get(0).type
+                        == RunnerEngine.EnemyType.STATIONARY
                         && Math.abs(stomp.getBonusPopups().get(0).x
                         - foe.x - RunnerEngine.PLAYER_WIDTH / 2f) < .01f,
                 "stomp shows a +300 bonus at the orange enemy's position");
@@ -1579,11 +1591,15 @@ public final class RunnerEngineChecks {
     private static void testSuspendedPlatforms() {
         RunnerEngine course = new RunnerEngine();
         course.startNewGame(1L);
-        course.generateAhead(40_000f);
+        course.generateAhead(200_000f);
         check(!course.getPlatforms().isEmpty(), "seeded course includes suspended platforms");
         RunnerEngine.Platform lower = course.getPlatforms().get(0);
         RunnerEngine.Platform higher = null;
+        float stepUpX = 0f;
         boolean sawHigh = false;
+        boolean sawOverWater = false;
+        float shortest = Float.MAX_VALUE;
+        float longest = 0f;
         for (int i = 0; i < course.getPlatforms().size(); i++) {
             RunnerEngine.Platform platform = course.getPlatforms().get(i);
             float clearance = RunnerEngine.GROUND_Y - platform.bottom;
@@ -1592,8 +1608,16 @@ public final class RunnerEngineChecks {
                             && Math.abs(platform.bottom - platform.top
                             - RunnerEngine.PLATFORM_THICKNESS) < .01f,
                     "platform underside leaves two to four car heights over ground");
-            check(openGroundUnderPlatform(course, platform),
-                    "platform leaves intact flat ground beneath it");
+            check(platform.width >= 5f * RunnerEngine.WORLD_UNITS_PER_METER
+                            && platform.width <= 45f * RunnerEngine.WORLD_UNITS_PER_METER,
+                    "platform lengths span the requested five to forty-five metres");
+            shortest = Math.min(shortest, platform.width);
+            longest = Math.max(longest, platform.width);
+            for (RunnerEngine.Hazard hazard : course.getHazards()) {
+                if (hazard.x >= platform.end()) break;
+                if (hazard.type == RunnerEngine.HazardType.HOLE
+                        && hazard.end() > platform.x) sawOverWater = true;
+            }
             if (i > 0) {
                 RunnerEngine.Platform previous = course.getPlatforms().get(i - 1);
                 check(previous.end() < platform.x, "platforms do not overlap");
@@ -1602,14 +1626,28 @@ public final class RunnerEngineChecks {
                     check(Math.abs(platform.x - previous.end() - 36f) < .1f
                                     && previous.top - platform.top < RunnerEngine.JUMP_HEIGHT,
                             "high platforms have a reachable lower stepping platform");
-                    if (higher == null) {
-                        lower = previous;
-                        higher = platform;
+                    if (higher == null && previous.width > 80f
+                            && openGroundUnderPlatform(course, previous)
+                            && openGroundUnderPlatform(course, platform)) {
+                        float rise = previous.top - platform.top;
+                        float landingTime = (490f + (float) Math.sqrt(490f * 490f
+                                - 2f * 1080f * rise)) / 1080f;
+                        float launchX = platform.x + platform.width / 2f
+                                - RunnerEngine.PLAYER_WIDTH / 2f
+                                - RunnerEngine.BASE_SPEED * landingTime;
+                        if (launchX >= previous.x
+                                && launchX + RunnerEngine.PLAYER_WIDTH <= previous.end()) {
+                            lower = previous;
+                            higher = platform;
+                            stepUpX = launchX;
+                        }
                     }
                 }
             }
         }
-        check(sawHigh && higher != null, "generated course includes a reachable high platform");
+        check(sawHigh && higher != null && sawOverWater
+                        && shortest < 75f && longest > 400f,
+                "platforms vary widely in length, sometimes span water, and can step upward");
 
         RunnerEngine land = placedAt(1L, lower.x - 135f,
                 RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
@@ -1629,7 +1667,7 @@ public final class RunnerEngineChecks {
         land.jump();
         check(land.getVelocityY() < 0f, "car can jump again from the platform top");
 
-        RunnerEngine stepUp = placedAt(1L, lower.end() - 135f,
+        RunnerEngine stepUp = placedAt(1L, stepUpX,
                 lower.top - RunnerEngine.PLAYER_HEIGHT, 0f);
         stepUp.jump();
         boolean reachedHigher = false;
@@ -1644,7 +1682,7 @@ public final class RunnerEngineChecks {
         }
         check(reachedHigher, "a regular jump reaches the higher platform from the lower one");
 
-        RunnerEngine below = placedAt(1L, lower.x + 55f,
+        RunnerEngine below = placedAt(1L, lower.x + Math.min(55f, lower.width / 2f),
                 RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
         float before = below.getPlayerX();
         below.jump();
@@ -1740,6 +1778,147 @@ public final class RunnerEngineChecks {
         check(same.platform != null && Math.abs(same.x - foe.x) < .01f
                         && Math.abs(same.y - foe.y) < .01f,
                 "activity restore retains an enemy's platform and patrol position");
+    }
+
+    private static void testPlatformBumpEliminatesEnemy() {
+        for (long seed = 0; seed < 150; seed++) {
+            RunnerEngine layout = new RunnerEngine();
+            layout.restore(seed, RunnerEngine.MAX_LIVES, 5140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            layout.generateAhead(70_000f);
+            for (RunnerEngine.Antagonist foe : layout.getAntagonists()) {
+                if (foe.type != RunnerEngine.EnemyType.STATIONARY || foe.platform == null
+                        || foe.platform.bottom < 275f
+                        || Float.isNaN(layout.surfaceYAt(foe.x))
+                        || Math.abs(layout.surfaceYAt(foe.x)
+                        - RunnerEngine.GROUND_Y) > .1f
+                        || layout.getStars().stream().anyMatch(s ->
+                        s.x >= foe.x - 30f && s.x < foe.x + 60f)) continue;
+                RunnerEngine game = placedAt(seed, foe.x - 20f,
+                        RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+                float spawnX = foe.spawnX;
+                if (game.getAntagonists().stream().noneMatch(e -> e.spawnX == spawnX)) continue;
+                game.jump();
+                for (int step = 0; step < 40 && game.getDefeatedAntagonists().length == 0;
+                        step++) game.update(1f / 120f);
+                check(game.getDefeatedAntagonists().length == 1
+                                && game.getAntagonists().stream().noneMatch(e -> e.spawnX == spawnX)
+                                && game.getBonusPoints() == 300
+                                && game.getHealth() == RunnerEngine.MAX_HEALTH
+                                && game.getEnemyBursts().size() == 1
+                                && game.getEnemyBursts().get(0).type
+                                == RunnerEngine.EnemyType.STATIONARY,
+                        "bumping under a turret gives its clean reward and orange firework");
+                RunnerEngine resumed = placedAt(seed, game.getPlayerX(), game.getPlayerY(),
+                        game.getVelocityY());
+                resumed.restoreEnemyBursts(game.getEnemyBurstState());
+                resumed.restoreBonusPopups(game.getBonusPopupState());
+                check(resumed.getEnemyBursts().size() == 1
+                                && resumed.getBonusPopups().stream().anyMatch(p ->
+                                p.amount == 300 && p.type == RunnerEngine.EnemyType.STATIONARY),
+                        "enemy firework and rising bonus retain their colors after restoration");
+                return;
+            }
+        }
+        throw new AssertionError("no turret with reachable underside found");
+    }
+
+    private static RunnerEngine enemyAtPlatformEdge(boolean overWater) {
+        for (long seed = 0; seed < 250; seed++) {
+            RunnerEngine layout = new RunnerEngine();
+            layout.restore(seed, RunnerEngine.MAX_LIVES, 12140f,
+                    RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                    0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+            layout.generateAhead(55_000f);
+            for (RunnerEngine.Antagonist foe : layout.getAntagonists()) {
+                if (foe.type != RunnerEngine.EnemyType.MOVING || foe.platform == null) continue;
+                float edgeX = foe.platform.end() - RunnerEngine.PLAYER_WIDTH - .1f;
+                if (Math.abs(edgeX - foe.spawnX) >= 49f) continue;
+                boolean waterAtEdge = Float.isNaN(layout.surfaceYAt(
+                        foe.platform.end() + RunnerEngine.PLAYER_WIDTH / 2f));
+                if (waterAtEdge != overWater) continue;
+                float startX = foe.spawnX - 300f;
+                float ground = layout.surfaceYAt(startX + RunnerEngine.PLAYER_WIDTH / 2f);
+                if (Float.isNaN(ground)) continue;
+                float[] state = layout.getAntagonistState();
+                for (int i = 1; i + 10 < state.length; i += 11) {
+                    if (Math.abs(state[i] - foe.spawnX) >= .1f) continue;
+                    state[i + 1] = edgeX;
+                    state[i + 3] = 1f;
+                    state[i + 4] = 10f;
+                    state[i + 5] = 10f;
+                    state[i + 6] = -5f;
+                    state[i + 7] = -100f;
+                    state[i + 9] = 1f;
+                    state[i + 10] = foe.platform.top - RunnerEngine.PLAYER_HEIGHT - 5f;
+                    break;
+                }
+                RunnerEngine active = new RunnerEngine();
+                active.restore(seed, RunnerEngine.MAX_LIVES, startX,
+                        ground - RunnerEngine.PLAYER_HEIGHT, 0f, 0f, 0d, 1f,
+                        RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                        RunnerEngine.MAX_HEALTH, 0f, foe.spawnX, 960f, null, null,
+                        null, 0, false, false, state, null);
+                active.continueGame();
+                float spawnX = foe.spawnX;
+                if (active.getAntagonists().stream().anyMatch(e -> e.spawnX == spawnX
+                        && Math.abs(e.x - edgeX) < .1f)) return active;
+            }
+        }
+        throw new AssertionError("no moving enemy with a "
+                + (overWater ? "water" : "land") + " platform edge found");
+    }
+
+    private static void testEnemyCanJumpOffSafePlatformEdge() {
+        RunnerEngine safe = enemyAtPlatformEdge(false);
+        RunnerEngine.Antagonist foe = safe.getAntagonists().stream()
+                .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
+                        && e.platform != null && e.x + RunnerEngine.PLAYER_WIDTH
+                        >= e.platform.end() - .2f).findFirst().get();
+        float spawnX = foe.spawnX;
+        RunnerEngine.Platform platform = foe.platform;
+        safe.update(1f / 120f);
+        check(foe.platform == null && foe.y + RunnerEngine.PLAYER_HEIGHT < platform.top
+                        && foe.x + RunnerEngine.PLAYER_WIDTH > platform.end(),
+                "jumping moving enemy leaves the platform at its edge, above its top");
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(safe.getSeed(), safe.getLives(), safe.getPlayerX(),
+                safe.getPlayerY(), safe.getVelocityY(), 0f,
+                safe.getElapsedRunSeconds(), safe.getTerrainSpeedMultiplier(),
+                safe.getMode(), safe.getResumeMode(), safe.getHealth(),
+                safe.getDamageRecoverySeconds(), safe.getFarthestX(),
+                safe.getVisibleWorldWidth(), safe.getAntagonistTimers(),
+                safe.getProjectileState(), safe.getDefeatedAntagonists(),
+                safe.getBonusPoints(), safe.hasCompletedFirstJump(),
+                safe.isControlledJumpInProgress(), safe.getAntagonistState(),
+                safe.getColoredProjectileState());
+        RunnerEngine.Antagonist resumedFoe = restored.getAntagonists().stream()
+                .filter(e -> e.spawnX == spawnX).findFirst().get();
+        check(resumedFoe.platform == null && Math.abs(resumedFoe.y - foe.y) < .01f,
+                "pause restoration keeps a detached enemy above the ground");
+        restored.continueGame();
+        for (int step = 0; step < 180
+                && enemyStateFor(restored, spawnX)[7] != 0f; step++) {
+            restored.update(1f / 120f);
+        }
+        check(resumedFoe.platform == null
+                        && Math.abs(resumedFoe.y + RunnerEngine.PLAYER_HEIGHT
+                        - restored.surfaceYAt(resumedFoe.x
+                        + RunnerEngine.PLAYER_WIDTH / 2f)) < .1f,
+                "enemy lands on the ground after leaving the platform and stays below it");
+
+        RunnerEngine blocked = enemyAtPlatformEdge(true);
+        RunnerEngine.Antagonist waterFoe = blocked.getAntagonists().stream()
+                .filter(e -> e.type == RunnerEngine.EnemyType.MOVING
+                        && e.platform != null && e.x + RunnerEngine.PLAYER_WIDTH
+                        >= e.platform.end() - .2f).findFirst().get();
+        RunnerEngine.Platform waterPlatform = waterFoe.platform;
+        blocked.update(1f / 120f);
+        check(waterFoe.platform == waterPlatform
+                        && waterFoe.x + RunnerEngine.PLAYER_WIDTH
+                        <= waterPlatform.end() + .01f,
+                "moving enemy refuses a platform edge jump into a water hole");
     }
 
     private static boolean openGroundUnderPlatform(RunnerEngine course,
@@ -1925,6 +2104,7 @@ public final class RunnerEngineChecks {
         boolean sawMixedGroup = false;
         int groupSize = 0;
         float previousX = Float.NaN;
+        float previousY = Float.NaN;
         RunnerEngine.StarColor previousColor = null;
         for (RunnerEngine.Star star : layout.getStars()) {
             check(star.x >= 140f + 200f * RunnerEngine.WORLD_UNITS_PER_METER,
@@ -1943,11 +2123,14 @@ public final class RunnerEngineChecks {
                     groupSize = 0;
                 } else {
                     check(gap >= 36f && gap <= 48f, "stars in a group have visible spacing");
+                    check(Math.abs(star.y - previousY) < .01f,
+                            "all stars in a group share the same height");
                     sawMixedGroup |= previousColor != star.color;
                 }
             }
             groupSize++;
             previousX = star.x;
+            previousY = star.y;
             previousColor = star.color;
 
             float ground = layout.surfaceYAt(star.x);
@@ -1990,6 +2173,28 @@ public final class RunnerEngineChecks {
         check(sawHoleStar && sawPlatformStar && sawUnderPlatform && sawMixedGroup,
                 "stars occur over water, above and below platforms, and in mixed groups");
 
+        for (long seed = 0; seed < 25; seed++) {
+            RunnerEngine varied = new RunnerEngine();
+            varied.startNewGame(seed);
+            varied.generateAhead(200_000f);
+            float lastX = Float.NaN;
+            float lastY = Float.NaN;
+            for (RunnerEngine.Star star : varied.getStars()) {
+                if (!Float.isNaN(lastX)) {
+                    float gap = star.x - lastX;
+                    if (gap < 50f) {
+                        check(Math.abs(star.y - lastY) < .01f,
+                                "every seeded star row stays aligned");
+                    } else {
+                        check(gap >= 1000f && gap <= 7500f,
+                                "star rows keep the 100 to 750 metre spacing");
+                    }
+                }
+                lastX = star.x;
+                lastY = star.y;
+            }
+        }
+
         RunnerEngine incremental = new RunnerEngine();
         incremental.startNewGame(19L);
         for (int x = 1000; x <= 200_000; x += 500) incremental.generateAhead(x);
@@ -2018,6 +2223,10 @@ public final class RunnerEngineChecks {
                 "touching a star removes it, creates a matching firework, and adds points only");
         check(pickup.getStarBursts().get(0).color == target.color,
                 "firework uses the collected star's color");
+        check(pickup.getBonusPopups().stream().anyMatch(popup ->
+                        popup.starColor == target.color
+                                && popup.amount == target.color.points),
+                "star collection displays its colored rising score");
         float[] collected = pickup.getCollectedStars();
         RunnerEngine resumed = new RunnerEngine();
         resumed.restore(pickup.getSeed(), pickup.getLives(), pickup.getPlayerX(),
@@ -2032,10 +2241,13 @@ public final class RunnerEngineChecks {
                 pickup.getColoredProjectileState());
         resumed.restoreCollectedStars(collected);
         resumed.restoreStarBursts(pickup.getStarBurstState());
+        resumed.restoreBonusPopups(pickup.getBonusPopupState());
         check(resumed.getScore() == pickup.getScore()
                         && resumed.getStars().stream().noneMatch(s -> s.x == target.x)
-                        && resumed.getStarBursts().size() == pickup.getStarBursts().size(),
-                "score, collected stars, and in-flight fireworks survive restoration");
+                        && resumed.getStarBursts().size() == pickup.getStarBursts().size()
+                        && resumed.getBonusPopups().stream().anyMatch(p ->
+                                p.starColor == target.color),
+                "score, collected stars, rising text and fireworks survive restoration");
         resumed.continueGame();
         for (int step = 0; step < 100; step++) resumed.update(1f / 120f);
         check(resumed.getStarBursts().isEmpty(), "firework particles fade away");
@@ -2112,6 +2324,8 @@ public final class RunnerEngineChecks {
         testProjectileTerrainCollisions();
         testSuspendedPlatforms();
         testPlatformEnemyPatrolAndRestore();
+        testPlatformBumpEliminatesEnemy();
+        testEnemyCanJumpOffSafePlatformEdge();
         testWaterAndStars();
         testLongerCourses();
         System.out.println("RunnerEngine checks passed");

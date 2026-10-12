@@ -131,7 +131,8 @@ public final class RunnerView extends View {
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN
                 || (engine.getMode() == RunnerEngine.Mode.GAME_OVER
                 && (!engine.getBonusPopups().isEmpty()
-                || !engine.getStarBursts().isEmpty()))) {
+                || !engine.getStarBursts().isEmpty()
+                || !engine.getEnemyBursts().isEmpty()))) {
             postInvalidateOnAnimation();
         }
     }
@@ -297,6 +298,7 @@ public final class RunnerView extends View {
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
         drawStarBursts(canvas, cameraX, right);
+        drawEnemyBursts(canvas, cameraX, right);
         if (!engine.isInWater()) drawHovercar(canvas);
         canvas.restore();
     }
@@ -339,17 +341,29 @@ public final class RunnerView extends View {
         paint.setStyle(Paint.Style.FILL);
         for (RunnerEngine.StarBurst burst : engine.getStarBursts()) {
             if (burst.x < left - 40f || burst.x > right + 40f) continue;
-            float progress = burst.getProgress();
-            int base = starColor(burst.color);
-            paint.setColor(Color.argb(Math.round(255f * (1f - progress)),
-                    Color.red(base), Color.green(base), Color.blue(base)));
-            for (int spark = 0; spark < 8; spark++) {
-                double angle = spark * Math.PI / 4d;
-                float radius = 5f + progress * 28f;
-                canvas.drawCircle(burst.x + radius * (float) Math.cos(angle),
-                        burst.y + radius * (float) Math.sin(angle),
-                        Math.max(1f, 3.5f * (1f - progress)), paint);
-            }
+            drawFirework(canvas, burst.x, burst.y, starColor(burst.color),
+                    burst.getProgress());
+        }
+    }
+
+    private void drawEnemyBursts(Canvas canvas, float left, float right) {
+        paint.setStyle(Paint.Style.FILL);
+        for (RunnerEngine.EnemyBurst burst : engine.getEnemyBursts()) {
+            if (burst.x < left - 40f || burst.x > right + 40f) continue;
+            drawFirework(canvas, burst.x, burst.y, enemyColor(burst.type),
+                    burst.getProgress());
+        }
+    }
+
+    private void drawFirework(Canvas canvas, float x, float y, int color, float progress) {
+        paint.setColor(Color.argb(Math.round(255f * (1f - progress)),
+                Color.red(color), Color.green(color), Color.blue(color)));
+        for (int spark = 0; spark < 8; spark++) {
+            double angle = spark * Math.PI / 4d;
+            float radius = 5f + progress * 28f;
+            canvas.drawCircle(x + radius * (float) Math.cos(angle),
+                    y + radius * (float) Math.sin(angle),
+                    Math.max(1f, 3.5f * (1f - progress)), paint);
         }
     }
 
@@ -432,41 +446,36 @@ public final class RunnerView extends View {
         canvas.rotate(-pitch);
         paint.setStyle(Paint.Style.FILL);
 
-        // A compact canopy and tapered, wheel-free hull fit the existing
-        // 32 x 46 collision bounds; the front of the car points right.
-        paint.setColor(AVATAR);
+        // The long shuttle is a visual silhouette around the original hitbox.
+        // Its cabin bulges upward; the tapered nose points right.
+        boolean blink = engine.isDamageBlinkLight();
+        paint.setColor(blink ? DAMAGE_BLINK_BLUE : AVATAR);
         carPath.rewind();
-        carPath.moveTo(-11f, -22f);
-        carPath.lineTo(-9f, -32f);
-        carPath.quadTo(-6f, -43f, -1f, -43f);
-        carPath.quadTo(6f, -42f, 10f, -29f);
-        carPath.lineTo(12f, -21f);
+        carPath.moveTo(-28f, -8f);
+        carPath.lineTo(-24f, -16f);
+        carPath.lineTo(-20f, -30f);
+        carPath.lineTo(-17f, -30f);
+        carPath.lineTo(-13f, -22f);
+        carPath.lineTo(-8f, -23f);
+        carPath.quadTo(-5f, -43f, 2f, -43f);
+        carPath.quadTo(10f, -43f, 13f, -23f);
+        carPath.lineTo(19f, -21f);
+        carPath.lineTo(28f, -12f);
+        carPath.lineTo(29f, -9f);
+        carPath.lineTo(21f, -4f);
+        carPath.quadTo(2f, 0f, -21f, -3f);
         carPath.close();
         canvas.drawPath(carPath, paint);
 
+        paint.setColor(blink ? DAMAGE_BLINK_BLUE : CAR_GLASS);
         carPath.rewind();
-        carPath.moveTo(-15f, -14f);
-        carPath.lineTo(-12f, -24f);
-        carPath.lineTo(8f, -24f);
-        carPath.lineTo(15f, -16f);
-        carPath.lineTo(16f, -9f);
-        carPath.quadTo(16f, -3f, 10f, -1f);
-        carPath.quadTo(0f, 0f, -11f, -1f);
-        carPath.quadTo(-16f, -3f, -16f, -8f);
+        carPath.moveTo(-5f, -25f);
+        carPath.lineTo(-3f, -35f);
+        carPath.quadTo(1f, -40f, 4f, -39f);
+        carPath.quadTo(9f, -35f, 10f, -25f);
         carPath.close();
         canvas.drawPath(carPath, paint);
-
-        // The cockpit takes over the old head's damage blink; the hull stays blue.
-        paint.setColor(engine.isDamageBlinkLight() ? DAMAGE_BLINK_BLUE : CAR_GLASS);
-        carPath.rewind();
-        carPath.moveTo(-7f, -28f);
-        carPath.lineTo(-5f, -35f);
-        carPath.quadTo(-3f, -39f, 0f, -39f);
-        carPath.quadTo(4f, -38f, 7f, -28f);
-        carPath.close();
-        canvas.drawPath(carPath, paint);
-        paint.setColor(CAR_GLASS);
-        canvas.drawRoundRect(11f, -14f, 15f, -11f, 1f, 1f, paint);
+        canvas.drawRoundRect(-28f, -11f, -24f, -7f, 1f, 1f, paint);
         canvas.restore();
     }
 
@@ -569,7 +578,8 @@ public final class RunnerView extends View {
         canvas.translate(-cameraX, 0f);
         for (RunnerEngine.BonusPopup popup : engine.getBonusPopups()) {
             float progress = popup.getProgress();
-            int color = enemyColor(popup.type);
+            int color = popup.starColor == null ? enemyColor(popup.type)
+                    : starColor(popup.starColor);
             int fadedColor = Color.argb(Math.round(255f * (1f - progress)),
                     Color.red(color), Color.green(color), Color.blue(color));
             text(canvas, "+" + popup.amount, popup.x, popup.y - 14f - 40f * progress,
@@ -596,12 +606,10 @@ public final class RunnerView extends View {
     private void drawHud(Canvas canvas) {
         if (engine.getMode() == RunnerEngine.Mode.TITLE) return;
         float x = 24f;
-        x = hudItem(canvas, "Distance " + engine.getDistance() + " m", x);
-        x = hudItem(canvas, "Best " + engine.getBestDistance() + " m", x);
+        x = hudItem(canvas, "Score " + engine.getScore(), x);
+        x = hudItem(canvas, "Best " + engine.getBestScore(), x);
         hudItem(canvas, String.format(Locale.US, "Speed %.1f m/s",
                 engine.getSpeedMetersPerSecond()), x);
-        text(canvas, "Score " + engine.getScore() + "  |  Best score "
-                + engine.getBestScore(), 24f, 71f, 17f, INK, Paint.Align.LEFT);
         drawLives(canvas, logicalWidth - 133f, 16f, 22f, 5f, -1f);
         drawHealth(canvas);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
@@ -699,11 +707,8 @@ public final class RunnerView extends View {
             canvas.drawColor(0x690F2D61);
             text(canvas, "Game over", midX, midY - 100f, 44f,
                     Color.WHITE, Paint.Align.CENTER);
-            text(canvas, "Distance " + engine.getDistance() + " m  |  Best "
-                    + engine.getBestDistance() + " m", midX, midY - 52f, 20f,
-                    Color.WHITE, Paint.Align.CENTER);
             text(canvas, "Score " + engine.getScore() + "  |  Best score "
-                    + engine.getBestScore(), midX, midY - 25f, 20f,
+                    + engine.getBestScore(), midX, midY - 45f, 20f,
                     Color.WHITE, Paint.Align.CENTER);
             button(canvas, "Restart", midX, midY);
         } else if (mode == RunnerEngine.Mode.TITLE) {
@@ -803,6 +808,7 @@ public final class RunnerView extends View {
         out.putInt("bonusPoints", engine.getBonusPoints());
         out.putFloatArray("collectedStars", engine.getCollectedStars());
         out.putFloatArray("starBursts", engine.getStarBurstState());
+        out.putFloatArray("enemyBursts", engine.getEnemyBurstState());
         out.putBoolean("firstJumpCompleted", engine.hasCompletedFirstJump());
         out.putBoolean("jumpInProgress", engine.isControlledJumpInProgress());
         out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
@@ -843,6 +849,7 @@ public final class RunnerView extends View {
             engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
             engine.restoreCollectedStars(saved.getFloatArray("collectedStars"));
             engine.restoreStarBursts(saved.getFloatArray("starBursts"));
+            engine.restoreEnemyBursts(saved.getFloatArray("enemyBursts"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }
