@@ -271,7 +271,7 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
-        // Draw the hull behind the water so the submerged part disappears below waves.
+        // Water over the submerged hull is translucent during a crossing.
         if (engine.isInWater()) drawHovercar(canvas);
         drawWater(canvas, cameraX, right);
         drawGrass(canvas, cameraX, right);
@@ -379,7 +379,10 @@ public final class RunnerView extends View {
             waterPath.lineTo(hazard.end(), waterY(hazard.end()));
             waterPath.lineTo(hazard.end(), RunnerEngine.WORLD_HEIGHT);
             waterPath.close();
-            paint.setColor(WATER);
+            boolean overCar = engine.isInWater()
+                    && Math.abs(hazard.x - engine.getActiveWaterHoleX()) < .1f;
+            paint.setColor(overCar ? Color.argb(77, Color.red(WATER),
+                    Color.green(WATER), Color.blue(WATER)) : WATER);
             paint.setStyle(Paint.Style.FILL);
             canvas.drawPath(waterPath, paint);
 
@@ -617,8 +620,9 @@ public final class RunnerView extends View {
             drawPauseButton(canvas);
         }
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
-                && (engine.isInWater() || !engine.hasCompletedFirstJump())) {
-            text(canvas, engine.isInWater() ? "Tap repeatedly to stay afloat"
+                && (engine.shouldShowWaterHint()
+                || (!engine.isInWater() && !engine.hasCompletedFirstJump()))) {
+            text(canvas, engine.shouldShowWaterHint() ? "Tap repeatedly to stay afloat"
                             : "Tap anywhere to jump", logicalWidth / 2f, 122f,
                     18f, INK, Paint.Align.CENTER);
         }
@@ -700,9 +704,10 @@ public final class RunnerView extends View {
         float midY = RunnerEngine.WORLD_HEIGHT / 2f;
         if (mode == RunnerEngine.Mode.PAUSED) {
             canvas.drawColor(0x690F2D61);
-            text(canvas, "Paused", midX, midY - 90f, 44f,
+            text(canvas, "Paused", midX, midY - 115f, 44f,
                     Color.WHITE, Paint.Align.CENTER);
-            button(canvas, "Continue", midX, midY);
+            button(canvas, "Continue", midX, midY - 20f);
+            button(canvas, "Restart", midX, midY + 75f);
         } else if (mode == RunnerEngine.Mode.GAME_OVER) {
             canvas.drawColor(0x690F2D61);
             text(canvas, "Game over", midX, midY - 100f, 44f,
@@ -715,8 +720,6 @@ public final class RunnerView extends View {
             text(canvas, "SKYBOUND RUNNER", midX, midY - 100f,
                     42f, INK, Paint.Align.CENTER);
             button(canvas, "Start", midX, midY);
-            text(canvas, "Jump for platforms and stars; avoid the water", midX, midY + 100f,
-                    21f, INK, Paint.Align.CENTER);
         } else {
             int number = Math.max(1, (int) Math.ceil(engine.getCountdownSeconds()));
             if (engine.getLives() < RunnerEngine.MAX_LIVES) {
@@ -763,10 +766,16 @@ public final class RunnerView extends View {
             lastFrameNanos = 0L;
         } else if (mode == RunnerEngine.Mode.RUNNING) {
             engine.jump();
+        } else if (mode == RunnerEngine.Mode.PAUSED
+                && Math.abs(x - logicalWidth / 2f) <= 110f
+                && Math.abs(y - (RunnerEngine.WORLD_HEIGHT / 2f + 75f)) <= 35f) {
+            engine.startNewGame(System.nanoTime());
+            lastFrameNanos = 0L;
         } else if (mode == RunnerEngine.Mode.TITLE || mode == RunnerEngine.Mode.PAUSED
                 || mode == RunnerEngine.Mode.GAME_OVER) {
             if (Math.abs(x - logicalWidth / 2f) <= 110f
-                    && Math.abs(y - RunnerEngine.WORLD_HEIGHT / 2f) <= 35f) {
+                    && Math.abs(y - RunnerEngine.WORLD_HEIGHT / 2f
+                    + (mode == RunnerEngine.Mode.PAUSED ? 20f : 0f)) <= 35f) {
                 if (mode == RunnerEngine.Mode.TITLE || mode == RunnerEngine.Mode.GAME_OVER) {
                     engine.startNewGame(System.nanoTime());
                 } else {
@@ -800,6 +809,7 @@ public final class RunnerView extends View {
         out.putDouble("elapsedRun", engine.getElapsedRunSeconds());
         out.putFloat("slopeSpeed", engine.getTerrainSpeedMultiplier());
         out.putFloatArray("waterState", engine.getWaterState());
+        out.putInt("waterEncounters", engine.getWaterEncounters());
         out.putBoolean("waitingForJump", engine.isWaitingForJump());
         out.putInt("health", engine.getHealth());
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
@@ -846,6 +856,7 @@ public final class RunnerView extends View {
                     saved.getFloatArray("coloredProjectiles"));
             engine.restoreTerrainStop(saved.getBoolean("waitingForJump", false));
             engine.restoreWaterState(saved.getFloatArray("waterState"));
+            engine.restoreWaterEncounters(saved.getInt("waterEncounters", 0));
             engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
             engine.restoreCollectedStars(saved.getFloatArray("collectedStars"));
             engine.restoreStarBursts(saved.getFloatArray("starBursts"));
