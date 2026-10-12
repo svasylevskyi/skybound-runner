@@ -31,6 +31,7 @@ public final class RunnerEngine {
     private static final float ENEMY_PATROL_SPEED = 42f;
     private static final float BONUS_POPUP_SECONDS = .9f;
     private static final float STAR_BURST_SECONDS = .55f;
+    private static final float ENEMY_BURST_SECONDS = .55f;
     private static final float STAR_GROUP_MIN_GAP = 100f * WORLD_UNITS_PER_METER;
     private static final int STAR_GROUP_GAP_VARIATION = 650 * (int) WORLD_UNITS_PER_METER;
     private static final float RESPAWN_DISTANCE = 50f * WORLD_UNITS_PER_METER;
@@ -129,7 +130,7 @@ public final class RunnerEngine {
         }
     }
 
-    /** A solid overhead surface; ground remains intact beneath it. */
+    /** A solid overhead surface, including over occasional water holes. */
     public static final class Platform {
         public final float x;
         public final float width;
@@ -149,7 +150,8 @@ public final class RunnerEngine {
     public static final class Antagonist {
         public final float spawnX;
         public final EnemyType type;
-        public final Platform platform;
+        public final Platform startingPlatform;
+        public Platform platform;
         public float x;
         public float y;
         private float shotTimer = .75f;
@@ -163,6 +165,7 @@ public final class RunnerEngine {
         private Antagonist(float x, float y, EnemyType type, Platform platform) {
             this.spawnX = x;
             this.type = type;
+            this.startingPlatform = platform;
             this.platform = platform;
             this.x = x;
             this.y = y;
@@ -195,6 +198,7 @@ public final class RunnerEngine {
         public final float y;
         public final int amount;
         public final EnemyType type;
+        public final StarColor starColor;
         private float remainingSeconds;
 
         private BonusPopup(float x, float y, int amount, EnemyType type, float remainingSeconds) {
@@ -202,6 +206,16 @@ public final class RunnerEngine {
             this.y = y;
             this.amount = amount;
             this.type = type;
+            this.starColor = null;
+            this.remainingSeconds = remainingSeconds;
+        }
+
+        private BonusPopup(float x, float y, StarColor color, float remainingSeconds) {
+            this.x = x;
+            this.y = y;
+            this.amount = color.points;
+            this.type = null;
+            this.starColor = color;
             this.remainingSeconds = remainingSeconds;
         }
 
@@ -238,6 +252,22 @@ public final class RunnerEngine {
         public float getProgress() { return 1f - remainingSeconds / STAR_BURST_SECONDS; }
     }
 
+    public static final class EnemyBurst {
+        public final float x;
+        public final float y;
+        public final EnemyType type;
+        private float remainingSeconds;
+
+        private EnemyBurst(float x, float y, EnemyType type, float remainingSeconds) {
+            this.x = x;
+            this.y = y;
+            this.type = type;
+            this.remainingSeconds = remainingSeconds;
+        }
+
+        public float getProgress() { return 1f - remainingSeconds / ENEMY_BURST_SECONDS; }
+    }
+
     private final List<Hazard> hazards = new ArrayList<>();
     private final List<Platform> platforms = new ArrayList<>();
     private final List<Antagonist> antagonists = new ArrayList<>();
@@ -247,6 +277,7 @@ public final class RunnerEngine {
     private final List<Star> stars = new ArrayList<>();
     private final List<Float> collectedStars = new ArrayList<>();
     private final List<StarBurst> starBursts = new ArrayList<>();
+    private final List<EnemyBurst> enemyBursts = new ArrayList<>();
     private Random random;
     private Random platformRandom;
     private Random antagonistRandom;
@@ -254,6 +285,7 @@ public final class RunnerEngine {
     private float nextHazardX;
     private float nextAntagonistX;
     private float nextStarGroupX;
+    private float lastStarGroupEndX;
     private float visibleWorldWidth = 960f;
     private long seed;
     private int lives = MAX_LIVES;
@@ -306,11 +338,13 @@ public final class RunnerEngine {
         stars.clear();
         collectedStars.clear();
         starBursts.clear();
+        enemyBursts.clear();
         nextHazardX = 840f;
         nextAntagonistX = START_X + ENEMY_START_DISTANCE + 900f
                 + antagonistRandom.nextInt(500);
         nextStarGroupX = START_X + StarColor.BLUE.unlockMetres * WORLD_UNITS_PER_METER
                 + starRandom.nextInt(1001);
+        lastStarGroupEndX = Float.NaN;
         playerX = START_X;
         farthestX = START_X;
         bonusPoints = 0;
@@ -354,19 +388,20 @@ public final class RunnerEngine {
             // platform is preceded by a lower one within jumping distance.
             float platformRoll = platformRandom.nextFloat();
             if (platformRoll < .28f) {
-                float x = hazard.end() + 160f;
-                Platform lower = new Platform(x, 380f + platformRandom.nextInt(51),
+                float x = type == HazardType.HOLE && platformRandom.nextBoolean()
+                        ? hazard.x - 12f : hazard.end() + 160f;
+                Platform lower = new Platform(x, 50f + platformRandom.nextInt(401),
                         PLAYER_HEIGHT * (2f + platformRandom.nextFloat() * .12f));
                 platforms.add(lower);
                 float lastEnd = lower.end();
                 if (platformRoll < .10f) {
                     Platform higher = new Platform(lastEnd + 36f,
-                            380f + platformRandom.nextInt(51),
+                            50f + platformRandom.nextInt(401),
                             PLAYER_HEIGHT * (2.7f + platformRandom.nextFloat() * 1.3f));
                     platforms.add(higher);
                     lastEnd = higher.end();
                 }
-                nextHazardX = lastEnd + 440f;
+                nextHazardX = Math.max(nextHazardX, lastEnd + 440f);
             }
         }
         generateStarsAhead(worldX);
@@ -380,10 +415,10 @@ public final class RunnerEngine {
                     && new Random(seed ^ 0xA0761D6478BD642FL
                     ^ ((long) Float.floatToIntBits(x) * 0xE7037ED1A0B428DBL)).nextBoolean()
                     ? EnemyType.MOVING : EnemyType.STATIONARY;
-            Platform platform = platformForEnemy(x, type);
+            Platform platform = platformForEnemy(x);
             float center = platform == null ? surfaceYAt(x + PLAYER_WIDTH / 2f)
                     : platform.top;
-            if (!wasDefeated(x) && !Float.isNaN(center) && canSpawnAt(x, type)) {
+            if (!wasDefeated(x) && !Float.isNaN(center) && canSpawnAt(x, type, platform)) {
                 Antagonist antagonist = new Antagonist(x, center - PLAYER_HEIGHT,
                         type, platform);
                 if (type == EnemyType.MOVING) {
@@ -402,32 +437,78 @@ public final class RunnerEngine {
 
     private void generateStarsAhead(float worldX) {
         while (nextStarGroupX < worldX) {
+            if (!validStarAnchor(nextStarGroupX)) {
+                nextStarGroupX = nearestValidStarAnchor(nextStarGroupX);
+                continue;
+            }
             int size = 1 + starRandom.nextInt(10);
             float x = nextStarGroupX;
+            Platform firstPlatform = platformAt(x);
+            boolean onPlatform = firstPlatform != null && !Float.isNaN(surfaceYAt(x))
+                    && x - STAR_RADIUS >= firstPlatform.x
+                    && x + STAR_RADIUS <= firstPlatform.end()
+                    && starRandom.nextBoolean();
+            float minBottom = -Float.MAX_VALUE;
+            float maxBottom = Float.MAX_VALUE;
+            List<Float> positions = new ArrayList<>();
             for (int i = 0; i < size; i++) {
-                StarColor color = randomStarColor(x);
                 float ground = surfaceYAt(x);
                 Platform overhead = platformAt(x);
-                boolean onPlatform = overhead != null
-                        && x - STAR_RADIUS >= overhead.x
-                        && x + STAR_RADIUS <= overhead.end()
-                        && starRandom.nextBoolean();
-                float support = onPlatform ? overhead.top
-                        : Float.isNaN(ground) ? GROUND_Y : ground;
-                float height = Float.isNaN(ground) ? JUMP_HEIGHT
-                        : PLAYER_HEIGHT / 2f
-                        + starRandom.nextFloat() * (JUMP_HEIGHT - PLAYER_HEIGHT / 2f);
+                if (onPlatform && (overhead != firstPlatform
+                        || x - STAR_RADIUS < overhead.x
+                        || x + STAR_RADIUS > overhead.end())) break;
+                float support = onPlatform ? overhead.top : ground;
+                float low = Float.isNaN(ground) && !onPlatform
+                        ? GROUND_Y - JUMP_HEIGHT : support - JUMP_HEIGHT;
+                float high = Float.isNaN(ground) && !onPlatform
+                        ? low : support - PLAYER_HEIGHT / 2f;
                 if (overhead != null && !onPlatform) {
-                    height = Math.min(height, support - overhead.bottom - 2f * STAR_RADIUS - 3f);
+                    low = Math.max(low, overhead.bottom + 2f * STAR_RADIUS + 3f);
                 }
-                if (height >= PLAYER_HEIGHT / 2f && !wasCollected(x)) {
-                    stars.add(new Star(x, support - height - STAR_RADIUS, color));
-                }
+                float nextMin = Math.max(minBottom, low);
+                float nextMax = Math.min(maxBottom, high);
+                if (nextMin > nextMax) break;
+                minBottom = nextMin;
+                maxBottom = nextMax;
+                positions.add(x);
                 if (i + 1 < size) x += 36f + starRandom.nextInt(13);
             }
+            if (!positions.isEmpty()) {
+                float bottom = minBottom + starRandom.nextFloat() * (maxBottom - minBottom);
+                for (float position : positions) {
+                    StarColor color = randomStarColor(position);
+                    if (!wasCollected(position)) {
+                        stars.add(new Star(position, bottom - STAR_RADIUS, color));
+                    }
+                }
+                lastStarGroupEndX = positions.get(positions.size() - 1);
+            }
+            x = positions.isEmpty() ? nextStarGroupX : positions.get(positions.size() - 1);
             nextStarGroupX = x + STAR_GROUP_MIN_GAP
                     + starRandom.nextInt(STAR_GROUP_GAP_VARIATION + 1);
         }
+    }
+
+    private boolean validStarAnchor(float x) {
+        if (!Float.isNaN(surfaceYAt(x))) return true;
+        Platform overhead = platformAt(x);
+        return overhead == null || overhead.bottom + 2f * STAR_RADIUS + 3f
+                <= GROUND_Y - JUMP_HEIGHT;
+    }
+
+    private float nearestValidStarAnchor(float candidate) {
+        float min = Float.isNaN(lastStarGroupEndX) ? candidate
+                : lastStarGroupEndX + STAR_GROUP_MIN_GAP;
+        float max = Float.isNaN(lastStarGroupEndX) ? candidate + 7500f
+                : lastStarGroupEndX + 7500f;
+        for (float x = candidate - 4f; x >= min; x -= 4f) {
+            if (validStarAnchor(x)) return x;
+        }
+        for (float x = candidate + 4f; x <= max; x += 4f) {
+            if (validStarAnchor(x)) return x;
+        }
+        // Every generated hazard is shorter than the 6500-unit search window.
+        return candidate + 4f;
     }
 
     private StarColor randomStarColor(float x) {
@@ -456,21 +537,16 @@ public final class RunnerEngine {
         return false;
     }
 
-    private Platform platformForEnemy(float x, EnemyType type) {
-        float patrol = type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
-        float left = x - patrol;
-        float right = x + PLAYER_WIDTH + patrol;
+    private Platform platformForEnemy(float x) {
         for (Platform platform : platforms) {
-            if (platform.x > left) break;
-            if (left >= platform.x + ENEMY_TERRAIN_CLEARANCE
-                    && right <= platform.end() - ENEMY_TERRAIN_CLEARANCE) {
-                return platform;
-            }
+            if (platform.x > x) break;
+            if (x >= platform.x && x + PLAYER_WIDTH <= platform.end()) return platform;
         }
         return null;
     }
 
-    private boolean canSpawnAt(float x, EnemyType type) {
+    private boolean canSpawnAt(float x, EnemyType type, Platform platform) {
+        if (platform != null) return true;
         float patrol = type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
         float left = x - patrol;
         float right = x + PLAYER_WIDTH + patrol;
@@ -543,6 +619,7 @@ public final class RunnerEngine {
         if (mode == Mode.RUNNING || mode == Mode.COUNTDOWN || mode == Mode.GAME_OVER) {
             updateBonusPopups(Math.max(0f, seconds));
             updateStarBursts(Math.max(0f, seconds));
+            updateEnemyBursts(Math.max(0f, seconds));
         }
         if (mode == Mode.COUNTDOWN) {
             countdownSeconds -= Math.max(0f, seconds);
@@ -654,13 +731,7 @@ public final class RunnerEngine {
                 boolean stomped = !wasStanding && velocityY > 0f
                         && oldFeet <= topQuarterEnd
                         && playerY + PLAYER_HEIGHT >= antagonist.y + 5f;
-                defeatedAntagonists.add(antagonist.spawnX);
-                antagonists.remove(i);
-                int bonus = antagonist.type == EnemyType.MOVING
-                        ? (stomped ? 400 : 200) : (stomped ? 300 : 100);
-                bonusPoints += bonus;
-                bonusPopups.add(new BonusPopup(antagonist.x + PLAYER_WIDTH / 2f,
-                        antagonist.y, bonus, antagonist.type, BONUS_POPUP_SECONDS));
+                defeatEnemy(i, stomped);
                 if (!stomped && takeDamage(2, true)) return true;
                 break;
             }
@@ -669,6 +740,18 @@ public final class RunnerEngine {
         collectStars();
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
+    }
+
+    private void defeatEnemy(int index, boolean withoutDamage) {
+        Antagonist enemy = antagonists.remove(index);
+        defeatedAntagonists.add(enemy.spawnX);
+        int bonus = enemy.type == EnemyType.MOVING
+                ? (withoutDamage ? 400 : 200) : (withoutDamage ? 300 : 100);
+        bonusPoints += bonus;
+        bonusPopups.add(new BonusPopup(enemy.x + PLAYER_WIDTH / 2f,
+                enemy.y, bonus, enemy.type, BONUS_POPUP_SECONDS));
+        enemyBursts.add(new EnemyBurst(enemy.x + PLAYER_WIDTH / 2f,
+                enemy.y + PLAYER_HEIGHT / 2f, enemy.type, ENEMY_BURST_SECONDS));
     }
 
     private Hazard touchingWaterHole() {
@@ -745,6 +828,8 @@ public final class RunnerEngine {
             stars.remove(i);
             collectedStars.add(star.x);
             bonusPoints += star.color.points;
+            bonusPopups.add(new BonusPopup(star.x, star.y, star.color,
+                    BONUS_POPUP_SECONDS));
             starBursts.add(new StarBurst(star.x, star.y, star.color, STAR_BURST_SECONDS));
         }
     }
@@ -758,6 +843,14 @@ public final class RunnerEngine {
                     && playerY <= platform.bottom && oldFeet > platform.top + 1f) {
                 playerY = platform.bottom;
                 velocityY = 0f;
+                for (int i = antagonists.size() - 1; i >= 0; i--) {
+                    Antagonist enemy = antagonists.get(i);
+                    float overlap = Math.min(playerX + PLAYER_WIDTH, enemy.x + PLAYER_WIDTH)
+                            - Math.max(playerX, enemy.x);
+                    if (enemy.platform == platform
+                            && enemy.y + PLAYER_HEIGHT >= platform.top - .5f
+                            && overlap >= PLAYER_WIDTH / 2f) defeatEnemy(i, true);
+                }
                 return;
             }
         }
@@ -887,29 +980,66 @@ public final class RunnerEngine {
                 antagonist.directionTimer = .35f + nextEnemyRandom(antagonist) * .9f;
             }
             float nextX = antagonist.x + antagonist.direction * ENEMY_PATROL_SPEED * dt;
-            if (Math.abs(nextX - antagonist.spawnX) <= ENEMY_PATROL_RANGE
-                    && canStandAt(nextX, antagonist.platform)) {
-                antagonist.x = nextX;
-            } else {
+            boolean withinPatrol = Math.abs(nextX - antagonist.spawnX) <= ENEMY_PATROL_RANGE;
+            boolean supported = canStandAt(nextX, antagonist.platform);
+            if (withinPatrol && antagonist.platform != null && !supported
+                    && antagonist.jumpVelocity != 0f
+                    && safeLandingAfterEdgeJump(antagonist, nextX)) {
+                antagonist.platform = null;
+                supported = true;
+            }
+            if (withinPatrol && supported) antagonist.x = nextX;
+            else {
                 antagonist.direction = -antagonist.direction;
             }
 
             antagonist.jumpTimer -= dt;
-            if (antagonist.jumpTimer <= 0f && antagonist.jumpOffset == 0f) {
+            if (antagonist.jumpTimer <= 0f && antagonist.jumpVelocity == 0f) {
                 antagonist.jumpVelocity = ENEMY_JUMP_VELOCITY;
                 antagonist.jumpTimer = 1f + nextEnemyRandom(antagonist) * 2f;
             }
             if (antagonist.jumpVelocity != 0f) {
-                antagonist.jumpOffset += antagonist.jumpVelocity * dt + .5f * GRAVITY * dt * dt;
+                antagonist.y += antagonist.jumpVelocity * dt + .5f * GRAVITY * dt * dt;
                 antagonist.jumpVelocity += GRAVITY * dt;
-                if (antagonist.jumpOffset >= 0f) {
+                Platform landingPlatform = antagonist.platform;
+                if (landingPlatform == null && antagonist.startingPlatform != null
+                        && antagonist.x + PLAYER_WIDTH / 2f
+                        < antagonist.startingPlatform.end()
+                        && antagonist.x + PLAYER_WIDTH / 2f
+                        >= antagonist.startingPlatform.x
+                        && antagonist.y + PLAYER_HEIGHT
+                        <= antagonist.startingPlatform.top + 1f) {
+                    landingPlatform = antagonist.startingPlatform;
+                }
+                float support = supportYAt(antagonist.x, landingPlatform);
+                if (!Float.isNaN(support) && antagonist.jumpVelocity > 0f
+                        && antagonist.y + PLAYER_HEIGHT >= support) {
+                    antagonist.y = support - PLAYER_HEIGHT;
+                    antagonist.platform = landingPlatform;
                     antagonist.jumpOffset = 0f;
                     antagonist.jumpVelocity = 0f;
+                } else {
+                    antagonist.jumpOffset = antagonist.y + PLAYER_HEIGHT
+                            - (Float.isNaN(support) ? GROUND_Y : support);
                 }
+            } else {
+                float support = supportYAt(antagonist.x, antagonist.platform);
+                if (!Float.isNaN(support)) antagonist.y = support - PLAYER_HEIGHT;
             }
-            antagonist.y = supportYAt(antagonist.x, antagonist.platform)
-                    - PLAYER_HEIGHT + antagonist.jumpOffset;
         }
+    }
+
+    private boolean safeLandingAfterEdgeJump(Antagonist enemy, float nextX) {
+        // Start beyond the edge, then predict the grounded footprint. Refuse a
+        // leap over water even if the sprite is currently high above its surface.
+        if (!canStandAt(nextX)) return false;
+        float drop = GROUND_Y - (enemy.y + PLAYER_HEIGHT);
+        float time = (-enemy.jumpVelocity + (float) Math.sqrt(
+                enemy.jumpVelocity * enemy.jumpVelocity + 2f * GRAVITY * Math.max(0f, drop)))
+                / GRAVITY;
+        float travel = Math.min(ENEMY_PATROL_SPEED * time,
+                ENEMY_PATROL_RANGE - Math.abs(nextX - enemy.spawnX));
+        return canStandAt(nextX + enemy.direction * Math.max(0f, travel));
     }
 
     private float supportYAt(float x, Platform platform) {
@@ -942,6 +1072,14 @@ public final class RunnerEngine {
             StarBurst burst = starBursts.get(i);
             burst.remainingSeconds -= dt;
             if (burst.remainingSeconds <= 0f) starBursts.remove(i);
+        }
+    }
+
+    private void updateEnemyBursts(float dt) {
+        for (int i = enemyBursts.size() - 1; i >= 0; i--) {
+            EnemyBurst burst = enemyBursts.get(i);
+            burst.remainingSeconds -= dt;
+            if (burst.remainingSeconds <= 0f) enemyBursts.remove(i);
         }
     }
 
@@ -1241,21 +1379,32 @@ public final class RunnerEngine {
         }
         generateAhead(farthestX + Math.max(1800f, visibleWorldWidth + 550f));
         if (savedEnemyState != null) {
+            boolean extended = savedEnemyState.length > 0 && savedEnemyState[0] == -2f;
+            int stride = extended ? 11 : 9;
             for (Antagonist antagonist : antagonists) {
-                for (int i = 0; i + 8 < savedEnemyState.length; i += 9) {
+                for (int i = extended ? 1 : 0; i + stride - 1 < savedEnemyState.length;
+                        i += stride) {
                     if (Math.abs(antagonist.spawnX - savedEnemyState[i]) >= .1f) continue;
                     float patrol = antagonist.type == EnemyType.MOVING ? ENEMY_PATROL_RANGE : 0f;
                     float savedX = Math.max(antagonist.spawnX - patrol,
                             Math.min(antagonist.spawnX + patrol, savedEnemyState[i + 1]));
-                    if (canStandAt(savedX, antagonist.platform)) antagonist.x = savedX;
+                    if (extended && savedEnemyState[i + 9] == 0f) {
+                        antagonist.platform = null;
+                        antagonist.x = savedX;
+                    } else if (canStandAt(savedX, antagonist.platform)) {
+                        antagonist.x = savedX;
+                    }
                     antagonist.shotTimer = Math.max(0f, savedEnemyState[i + 2]);
                     antagonist.direction = savedEnemyState[i + 3] < 0f ? -1 : 1;
                     antagonist.directionTimer = Math.max(0f, savedEnemyState[i + 4]);
                     antagonist.jumpTimer = Math.max(0f, savedEnemyState[i + 5]);
-                    antagonist.jumpOffset = Math.max(-30f, Math.min(0f, savedEnemyState[i + 6]));
+                    antagonist.jumpOffset = Math.max(-WORLD_HEIGHT,
+                            Math.min(0f, savedEnemyState[i + 6]));
                     antagonist.jumpVelocity = savedEnemyState[i + 7];
                     antagonist.behaviorStep = Math.max(0, (int) savedEnemyState[i + 8]);
-                    antagonist.y = supportYAt(antagonist.x, antagonist.platform)
+                    antagonist.y = extended && Float.isFinite(savedEnemyState[i + 10])
+                            ? savedEnemyState[i + 10]
+                            : supportYAt(antagonist.x, antagonist.platform)
                             - PLAYER_HEIGHT + antagonist.jumpOffset;
                     break;
                 }
@@ -1299,6 +1448,7 @@ public final class RunnerEngine {
     public List<Platform> getPlatforms() { return Collections.unmodifiableList(platforms); }
     public List<Star> getStars() { return Collections.unmodifiableList(stars); }
     public List<StarBurst> getStarBursts() { return Collections.unmodifiableList(starBursts); }
+    public List<EnemyBurst> getEnemyBursts() { return Collections.unmodifiableList(enemyBursts); }
     public float[] getCollectedStars() {
         float[] state = new float[collectedStars.size()];
         for (int i = 0; i < state.length; i++) state[i] = collectedStars.get(i);
@@ -1337,6 +1487,27 @@ public final class RunnerEngine {
                     StarColor.values()[color], state[i + 3]));
         }
     }
+    public float[] getEnemyBurstState() {
+        float[] state = new float[enemyBursts.size() * 4];
+        for (int i = 0; i < enemyBursts.size(); i++) {
+            EnemyBurst burst = enemyBursts.get(i);
+            state[i * 4] = burst.x;
+            state[i * 4 + 1] = burst.y;
+            state[i * 4 + 2] = burst.type.ordinal();
+            state[i * 4 + 3] = burst.remainingSeconds;
+        }
+        return state;
+    }
+    public void restoreEnemyBursts(float[] state) {
+        enemyBursts.clear();
+        if (state == null) return;
+        for (int i = 0; i + 3 < state.length; i += 4) {
+            if (state[i + 2] != 0f && state[i + 2] != 1f) continue;
+            if (state[i + 3] <= 0f || state[i + 3] > ENEMY_BURST_SECONDS) continue;
+            enemyBursts.add(new EnemyBurst(state[i], state[i + 1],
+                    EnemyType.values()[(int) state[i + 2]], state[i + 3]));
+        }
+    }
     public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
     public List<BonusPopup> getBonusPopups() { return Collections.unmodifiableList(bonusPopups); }
     public float[] getDefeatedAntagonists() {
@@ -1354,10 +1525,12 @@ public final class RunnerEngine {
         return state;
     }
     public float[] getAntagonistState() {
-        float[] state = new float[antagonists.size() * 9];
+        // The leading sentinel distinguishes this layout from older 9-value saves.
+        float[] state = new float[1 + antagonists.size() * 11];
+        state[0] = -2f;
         for (int i = 0; i < antagonists.size(); i++) {
             Antagonist foe = antagonists.get(i);
-            int offset = i * 9;
+            int offset = 1 + i * 11;
             state[offset] = foe.spawnX;
             state[offset + 1] = foe.x;
             state[offset + 2] = foe.shotTimer;
@@ -1367,6 +1540,8 @@ public final class RunnerEngine {
             state[offset + 6] = foe.jumpOffset;
             state[offset + 7] = foe.jumpVelocity;
             state[offset + 8] = foe.behaviorStep;
+            state[offset + 9] = foe.platform == null ? 0f : 1f;
+            state[offset + 10] = foe.y;
         }
         return state;
     }
@@ -1402,7 +1577,8 @@ public final class RunnerEngine {
             state[offset] = popup.x;
             state[offset + 1] = popup.y;
             state[offset + 2] = popup.amount;
-            state[offset + 3] = popup.type.ordinal();
+            state[offset + 3] = popup.starColor == null ? popup.type.ordinal()
+                    : 2 + popup.starColor.ordinal();
             state[offset + 4] = popup.remainingSeconds;
         }
         return state;
@@ -1412,9 +1588,14 @@ public final class RunnerEngine {
         if (state == null) return;
         for (int i = 0; i + 4 < state.length; i += 5) {
             if (state[i + 4] <= 0f || state[i + 4] > BONUS_POPUP_SECONDS) continue;
-            EnemyType type = state[i + 3] == 1f ? EnemyType.MOVING : EnemyType.STATIONARY;
-            bonusPopups.add(new BonusPopup(state[i], state[i + 1],
-                    (int) state[i + 2], type, state[i + 4]));
+            int kind = (int) state[i + 3];
+            if (kind >= 2 && kind < 2 + StarColor.values().length) {
+                bonusPopups.add(new BonusPopup(state[i], state[i + 1],
+                        StarColor.values()[kind - 2], state[i + 4]));
+            } else if (kind == 0 || kind == 1) {
+                bonusPopups.add(new BonusPopup(state[i], state[i + 1],
+                        (int) state[i + 2], EnemyType.values()[kind], state[i + 4]));
+            }
         }
     }
     public void loadBestDistance(int distance) { bestDistance = Math.max(0, distance); }
