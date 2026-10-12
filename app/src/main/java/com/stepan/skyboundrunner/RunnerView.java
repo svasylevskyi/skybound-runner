@@ -21,6 +21,8 @@ public final class RunnerView extends View {
     private static final int YELLOW = Color.rgb(250, 210, 66);
     private static final int AVATAR = Color.rgb(35, 57, 126);
     private static final int DAMAGE_BLINK_BLUE = Color.rgb(218, 245, 255);
+    private static final int CAR_GLASS = Color.rgb(91, 162, 210);
+    private static final float HOVER_GAP = 2f;
     private static final int ENEMY_RED = Color.rgb(222, 45, 54);
     private static final int ENEMY_RED_WEAPON = Color.rgb(162, 34, 45);
     private static final int ENEMY_ORANGE = Color.rgb(242, 123, 32);
@@ -35,6 +37,7 @@ public final class RunnerView extends View {
     private final Path terrainPath = new Path();
     private final Path heartPath = new Path();
     private final Path turretPath = new Path();
+    private final Path carPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
@@ -55,7 +58,7 @@ public final class RunnerView extends View {
         }
         engine.loadBestDistance(best);
         setFocusable(true);
-        setContentDescription("Skybound Runner game. Tap anywhere to jump while running.");
+        setContentDescription("Skybound Runner game. Tap anywhere to jump while moving.");
     }
 
     @Override
@@ -138,11 +141,58 @@ public final class RunnerView extends View {
             paint.setColor(enemyColor(shot.type));
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
-        float stride = Math.abs(engine.getSpeed()) > 1f
-                ? (float) Math.sin(engine.getPlayerX() * .055f) : 0f;
-        drawStickFigure(canvas, engine.getPlayerX(), engine.getPlayerY(),
-                AVATAR, engine.isDamageBlinkLight(), stride,
-                Math.abs(engine.getVelocityY()) > 1f, false);
+        drawHovercar(canvas);
+        canvas.restore();
+    }
+
+    private void drawHovercar(Canvas canvas) {
+        float pitch = engine.getPlayerPitchDegrees();
+        double radians = Math.toRadians(pitch);
+        float footX = engine.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f;
+        float footY = engine.getPlayerY() + RunnerEngine.PLAYER_HEIGHT;
+        canvas.save();
+        // Keep the lowest point two world pixels above the surface, measured
+        // perpendicular to the car's orientation (and to a slope when grounded).
+        canvas.translate(footX - HOVER_GAP * (float) Math.sin(radians),
+                footY - HOVER_GAP * (float) Math.cos(radians));
+        canvas.rotate(-pitch);
+        paint.setStyle(Paint.Style.FILL);
+
+        // A compact canopy and tapered, wheel-free hull fit the existing
+        // 32 x 46 collision bounds; the front of the car points right.
+        paint.setColor(AVATAR);
+        carPath.rewind();
+        carPath.moveTo(-11f, -22f);
+        carPath.lineTo(-9f, -32f);
+        carPath.quadTo(-6f, -43f, -1f, -43f);
+        carPath.quadTo(6f, -42f, 10f, -29f);
+        carPath.lineTo(12f, -21f);
+        carPath.close();
+        canvas.drawPath(carPath, paint);
+
+        carPath.rewind();
+        carPath.moveTo(-15f, -14f);
+        carPath.lineTo(-12f, -24f);
+        carPath.lineTo(8f, -24f);
+        carPath.lineTo(15f, -16f);
+        carPath.lineTo(16f, -9f);
+        carPath.quadTo(16f, -3f, 10f, -1f);
+        carPath.quadTo(0f, 0f, -11f, -1f);
+        carPath.quadTo(-16f, -3f, -16f, -8f);
+        carPath.close();
+        canvas.drawPath(carPath, paint);
+
+        // The cockpit takes over the old head's damage blink; the hull stays blue.
+        paint.setColor(engine.isDamageBlinkLight() ? DAMAGE_BLINK_BLUE : CAR_GLASS);
+        carPath.rewind();
+        carPath.moveTo(-7f, -28f);
+        carPath.lineTo(-5f, -35f);
+        carPath.quadTo(-3f, -39f, 0f, -39f);
+        carPath.quadTo(4f, -38f, 7f, -28f);
+        carPath.close();
+        canvas.drawPath(carPath, paint);
+        paint.setColor(CAR_GLASS);
+        canvas.drawRoundRect(11f, -14f, 15f, -11f, 1f, 1f, paint);
         canvas.restore();
     }
 

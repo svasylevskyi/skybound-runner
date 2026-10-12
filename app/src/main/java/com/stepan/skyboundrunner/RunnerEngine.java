@@ -382,7 +382,6 @@ public final class RunnerEngine {
         velocityY += GRAVITY * pace * dt;
         stopAtVerticalFace(oldX, wasStanding);
         if (!waitingForJump && wasStanding) stopAtSlopeFoot(oldX);
-        farthestX = Math.max(farthestX, playerX);
 
         // A jump can land on the near edge before the runner's center reaches it.
         boolean landed = false;
@@ -414,12 +413,20 @@ public final class RunnerEngine {
             if (wasStanding && continuous) {
                 // Grounded movement follows uphill and downhill planes.
                 landAt(surface);
-            } else if (velocityY >= 0f && !Float.isNaN(surface)
-                    && oldFeet <= surface + 1f
-                    && playerY + PLAYER_HEIGHT >= surface) {
-                landAt(surface);
+            } else {
+                boolean landedOnRamp = velocityY >= 0f && !Float.isNaN(oldSurface)
+                        && oldFeet <= oldSurface + 1f
+                        && landOnCrossedRisingSlope(oldX, oldFeet, feet);
+                if (!landedOnRamp && velocityY >= 0f && !Float.isNaN(surface)
+                        && playerY + PLAYER_HEIGHT >= surface
+                        && (oldFeet <= surface + 1f
+                        // The rising surface can cross the feet during this frame.
+                        || (continuous && oldFeet <= oldSurface + 1f))) {
+                    landAt(surface);
+                }
             }
         }
+        farthestX = Math.max(farthestX, playerX);
         if (playerY + PLAYER_HEIGHT > GROUND_Y + MAX_TERRAIN_HEIGHT + 17f) {
             loseLife();
             return true;
@@ -448,6 +455,42 @@ public final class RunnerEngine {
         }
         if (updateProjectiles(dt)) return true;
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
+        return false;
+    }
+
+    private boolean landOnCrossedRisingSlope(float oldX, float oldFeet, float newFeet) {
+        float fromCenter = oldX + PLAYER_WIDTH / 2f;
+        float toCenter = playerX + PLAYER_WIDTH / 2f;
+        if (toCenter <= fromCenter) return false;
+        for (Hazard hazard : hazards) {
+            if (hazard.x > toCenter) break;
+            if (hazard.type == HazardType.HOLE || hazard.end() <= fromCenter) continue;
+            float rampStart = hazard.type == HazardType.WALL
+                    ? hazard.x : hazard.flatEnd;
+            float rampEnd = hazard.type == HazardType.WALL
+                    ? hazard.flatStart : hazard.end();
+            if (rampEnd <= rampStart || rampEnd <= fromCenter
+                    || rampStart >= toCenter) continue;
+
+            float entry = Math.max(fromCenter, rampStart);
+            float exit = Math.min(toCenter, rampEnd);
+            float entryFeet = oldFeet + (newFeet - oldFeet)
+                    * (entry - fromCenter) / (toCenter - fromCenter);
+            float exitFeet = oldFeet + (newFeet - oldFeet)
+                    * (exit - fromCenter) / (toCenter - fromCenter);
+            float entryGap = entryFeet - hazard.surfaceYAt(entry);
+            float exitGap = exitFeet - hazard.surfaceYAt(exit);
+            if (exitGap < 0f) continue;
+
+            // If the feet reached ground just before the ramp, stop at its foot.
+            // Otherwise solve the intersection of the foot path and rising plane.
+            float fraction = entryGap >= 0f ? 0f
+                    : -entryGap / (exitGap - entryGap);
+            float contactCenter = entry + (exit - entry) * fraction;
+            playerX = contactCenter - PLAYER_WIDTH / 2f;
+            landAt(hazard.surfaceYAt(contactCenter));
+            return true;
+        }
         return false;
     }
 
@@ -981,6 +1024,11 @@ public final class RunnerEngine {
     public int getBonusMeters() { return bonusMeters; }
     public float getPlayerY() { return playerY; }
     public float getVelocityY() { return velocityY; }
+    /** Nose-up angle for drawing the car; grounded motion follows the terrain. */
+    public float getPlayerPitchDegrees() {
+        if (isStanding()) return slopeDegreesAt(playerX + PLAYER_WIDTH / 2f);
+        return (float) Math.toDegrees(Math.atan2(-velocityY, Math.max(1f, Math.abs(getSpeed()))));
+    }
     public boolean isControlledJumpInProgress() { return controlledJumpInProgress; }
     public boolean hasCompletedFirstJump() { return firstJumpCompleted; }
     public int getHealth() { return health; }
