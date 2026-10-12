@@ -17,6 +17,8 @@ public final class RunnerEngine {
     public static final int MAX_LIVES = 5;
     public static final float PROJECTILE_RADIUS = 6f;
     public static final float PLATFORM_THICKNESS = 10f;
+    public static final float STAR_RADIUS = 11f;
+    public static final float WATER_SURFACE_Y = GROUND_Y + 2f;
     // Muzzle position relative to the enemy's 32 x 46 collision bounds.
     public static final float MUZZLE_X = -2f;
     public static final float MUZZLE_Y = PLAYER_HEIGHT / 2f;
@@ -28,6 +30,9 @@ public final class RunnerEngine {
     private static final float ENEMY_TERRAIN_CLEARANCE = 10f * WORLD_UNITS_PER_METER;
     private static final float ENEMY_PATROL_SPEED = 42f;
     private static final float BONUS_POPUP_SECONDS = .9f;
+    private static final float STAR_BURST_SECONDS = .55f;
+    private static final float STAR_GROUP_MIN_GAP = 100f * WORLD_UNITS_PER_METER;
+    private static final int STAR_GROUP_GAP_VARIATION = 650 * (int) WORLD_UNITS_PER_METER;
     private static final float RESPAWN_DISTANCE = 50f * WORLD_UNITS_PER_METER;
     private static final float SAFE_RESPAWN_LEAD = 110f;
     private static final float DAMAGE_RECOVERY_SECONDS = .65f;
@@ -52,6 +57,18 @@ public final class RunnerEngine {
     public enum Mode { TITLE, COUNTDOWN, RUNNING, PAUSED, GAME_OVER }
     public enum HazardType { HOLE, WALL, DIP }
     public enum EnemyType { STATIONARY, MOVING }
+    public enum StarColor {
+        BLUE(200, 10), GREEN(400, 20), YELLOW(600, 30),
+        ORANGE(800, 40), RED(1000, 50);
+
+        public final int unlockMetres;
+        public final int points;
+
+        StarColor(int unlockMetres, int points) {
+            this.unlockMetres = unlockMetres;
+            this.points = points;
+        }
+    }
 
     public static final class Hazard {
         public final HazardType type;
@@ -187,23 +204,58 @@ public final class RunnerEngine {
         public float getProgress() { return 1f - remainingSeconds / BONUS_POPUP_SECONDS; }
     }
 
+    public static final class Star {
+        public final float x;
+        public final float y;
+        public final StarColor color;
+
+        private Star(float x, float y, StarColor color) {
+            this.x = x;
+            this.y = y;
+            this.color = color;
+        }
+
+        public float bottom() { return y + STAR_RADIUS; }
+    }
+
+    public static final class StarBurst {
+        public final float x;
+        public final float y;
+        public final StarColor color;
+        private float remainingSeconds;
+
+        private StarBurst(float x, float y, StarColor color, float remainingSeconds) {
+            this.x = x;
+            this.y = y;
+            this.color = color;
+            this.remainingSeconds = remainingSeconds;
+        }
+
+        public float getProgress() { return 1f - remainingSeconds / STAR_BURST_SECONDS; }
+    }
+
     private final List<Hazard> hazards = new ArrayList<>();
     private final List<Platform> platforms = new ArrayList<>();
     private final List<Antagonist> antagonists = new ArrayList<>();
     private final List<Float> defeatedAntagonists = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
     private final List<BonusPopup> bonusPopups = new ArrayList<>();
+    private final List<Star> stars = new ArrayList<>();
+    private final List<Float> collectedStars = new ArrayList<>();
+    private final List<StarBurst> starBursts = new ArrayList<>();
     private Random random;
     private Random platformRandom;
     private Random antagonistRandom;
+    private Random starRandom;
     private float nextHazardX;
     private float nextAntagonistX;
+    private float nextStarGroupX;
     private float visibleWorldWidth = 960f;
     private long seed;
     private int lives = MAX_LIVES;
     private float playerX;
     private float farthestX;
-    private int bonusMeters;
+    private int bonusPoints;
     private float playerY;
     private float velocityY;
     private boolean controlledJumpInProgress;
@@ -215,6 +267,7 @@ public final class RunnerEngine {
     private float terrainSpeedMultiplier = 1f;
     private boolean waitingForJump;
     private int bestDistance;
+    private int bestScore;
     private Mode mode = Mode.TITLE;
     private Mode resumeMode = Mode.RUNNING;
 
@@ -234,18 +287,24 @@ public final class RunnerEngine {
         random = new Random(seed);
         platformRandom = new Random(seed ^ 0xC2B2AE3D27D4EB4FL);
         antagonistRandom = new Random(seed ^ 0x6A09E667F3BCC909L);
+        starRandom = new Random(seed ^ 0xBB67AE8584CAA73BL);
         hazards.clear();
         platforms.clear();
         antagonists.clear();
         defeatedAntagonists.clear();
         projectiles.clear();
         bonusPopups.clear();
+        stars.clear();
+        collectedStars.clear();
+        starBursts.clear();
         nextHazardX = 840f;
         nextAntagonistX = START_X + ENEMY_START_DISTANCE + 900f
                 + antagonistRandom.nextInt(500);
+        nextStarGroupX = START_X + StarColor.BLUE.unlockMetres * WORLD_UNITS_PER_METER
+                + starRandom.nextInt(1001);
         playerX = START_X;
         farthestX = START_X;
-        bonusMeters = 0;
+        bonusPoints = 0;
         playerY = GROUND_Y - PLAYER_HEIGHT;
         velocityY = 0f;
         controlledJumpInProgress = false;
@@ -260,8 +319,7 @@ public final class RunnerEngine {
 
     public void generateAhead(float worldX) {
         // Generate far enough to check the full patrol area and clearance of the last spawn.
-        while (nextHazardX < worldX + ENEMY_TERRAIN_CLEARANCE
-                + ENEMY_PATROL_RANGE + PLAYER_WIDTH) {
+        while (nextHazardX < worldX + 600f) {
             HazardType type = HAZARD_TYPES[random.nextInt(HAZARD_TYPES.length)];
             float flatWidth;
             if (type == HazardType.HOLE) {
@@ -298,6 +356,7 @@ public final class RunnerEngine {
                 nextHazardX = lastEnd + 440f;
             }
         }
+        generateStarsAhead(worldX);
         if (getCourseDistance() < 500) return;
         while (nextAntagonistX < worldX) {
             float x = nextAntagonistX;
@@ -326,6 +385,62 @@ public final class RunnerEngine {
                     visibleWorldWidth + PLAYER_WIDTH + 2f * ENEMY_PATROL_RANGE + 20f)
                     + antagonistRandom.nextInt(1200);
         }
+    }
+
+    private void generateStarsAhead(float worldX) {
+        while (nextStarGroupX < worldX) {
+            int size = 1 + starRandom.nextInt(10);
+            float x = nextStarGroupX;
+            for (int i = 0; i < size; i++) {
+                StarColor color = randomStarColor(x);
+                float ground = surfaceYAt(x);
+                Platform overhead = platformAt(x);
+                boolean onPlatform = overhead != null
+                        && x - STAR_RADIUS >= overhead.x
+                        && x + STAR_RADIUS <= overhead.end()
+                        && starRandom.nextBoolean();
+                float support = onPlatform ? overhead.top
+                        : Float.isNaN(ground) ? GROUND_Y : ground;
+                float height = Float.isNaN(ground) ? JUMP_HEIGHT
+                        : PLAYER_HEIGHT / 2f
+                        + starRandom.nextFloat() * (JUMP_HEIGHT - PLAYER_HEIGHT / 2f);
+                if (overhead != null && !onPlatform) {
+                    height = Math.min(height, support - overhead.bottom - 2f * STAR_RADIUS - 3f);
+                }
+                if (height >= PLAYER_HEIGHT / 2f && !wasCollected(x)) {
+                    stars.add(new Star(x, support - height - STAR_RADIUS, color));
+                }
+                if (i + 1 < size) x += 36f + starRandom.nextInt(13);
+            }
+            nextStarGroupX = x + STAR_GROUP_MIN_GAP
+                    + starRandom.nextInt(STAR_GROUP_GAP_VARIATION + 1);
+        }
+    }
+
+    private StarColor randomStarColor(float x) {
+        StarColor[] colors = StarColor.values();
+        int available = 0;
+        for (StarColor color : colors) {
+            if (x >= START_X + color.unlockMetres * WORLD_UNITS_PER_METER) available++;
+        }
+        return colors[starRandom.nextInt(Math.max(1, available))];
+    }
+
+    private Platform platformAt(float x) {
+        for (Platform platform : platforms) {
+            if (platform.x > x + STAR_RADIUS) break;
+            if (x + STAR_RADIUS > platform.x && x - STAR_RADIUS < platform.end()) {
+                return platform;
+            }
+        }
+        return null;
+    }
+
+    private boolean wasCollected(float starX) {
+        for (float x : collectedStars) {
+            if (Math.abs(x - starX) < .1f) return true;
+        }
+        return false;
     }
 
     private Platform platformForEnemy(float x, EnemyType type) {
@@ -407,6 +522,7 @@ public final class RunnerEngine {
     public void update(float seconds) {
         if (mode == Mode.RUNNING || mode == Mode.COUNTDOWN || mode == Mode.GAME_OVER) {
             updateBonusPopups(Math.max(0f, seconds));
+            updateStarBursts(Math.max(0f, seconds));
         }
         if (mode == Mode.COUNTDOWN) {
             countdownSeconds -= Math.max(0f, seconds);
@@ -499,6 +615,10 @@ public final class RunnerEngine {
         }
         stopAtPlatformEdge(oldX);
         farthestX = Math.max(farthestX, playerX);
+        if (touchesWater()) {
+            loseLife();
+            return true;
+        }
         if (playerY + PLAYER_HEIGHT > GROUND_Y + MAX_TERRAIN_HEIGHT + 17f) {
             loseLife();
             return true;
@@ -517,8 +637,9 @@ public final class RunnerEngine {
                         && playerY + PLAYER_HEIGHT >= antagonist.y + 5f;
                 defeatedAntagonists.add(antagonist.spawnX);
                 antagonists.remove(i);
-                int bonus = stomped ? 2 : 1;
-                bonusMeters += bonus;
+                int bonus = antagonist.type == EnemyType.MOVING
+                        ? (stomped ? 400 : 200) : (stomped ? 300 : 100);
+                bonusPoints += bonus;
                 bonusPopups.add(new BonusPopup(antagonist.x + PLAYER_WIDTH / 2f,
                         antagonist.y, bonus, antagonist.type, BONUS_POPUP_SECONDS));
                 if (!stomped && takeDamage(2, true)) return true;
@@ -526,8 +647,37 @@ public final class RunnerEngine {
             }
         }
         if (updateProjectiles(dt)) return true;
+        collectStars();
         if (playerX > oldX + .01f) elapsedRunSeconds += dt;
         return false;
+    }
+
+    private boolean touchesWater() {
+        if (playerY + PLAYER_HEIGHT < WATER_SURFACE_Y) return false;
+        float center = playerX + PLAYER_WIDTH / 2f;
+        for (Hazard hazard : hazards) {
+            if (hazard.x > center) break;
+            if (hazard.type == HazardType.HOLE && playerX >= hazard.x
+                    && center < hazard.end()) return true;
+        }
+        return false;
+    }
+
+    private void collectStars() {
+        for (int i = stars.size() - 1; i >= 0; i--) {
+            Star star = stars.get(i);
+            if (star.x < playerX - STAR_RADIUS) break;
+            if (star.x > playerX + PLAYER_WIDTH + STAR_RADIUS) continue;
+            float nearX = Math.max(playerX, Math.min(star.x, playerX + PLAYER_WIDTH));
+            float nearY = Math.max(playerY, Math.min(star.y, playerY + PLAYER_HEIGHT));
+            float dx = star.x - nearX;
+            float dy = star.y - nearY;
+            if (dx * dx + dy * dy > STAR_RADIUS * STAR_RADIUS) continue;
+            stars.remove(i);
+            collectedStars.add(star.x);
+            bonusPoints += star.color.points;
+            starBursts.add(new StarBurst(star.x, star.y, star.color, STAR_BURST_SECONDS));
+        }
     }
 
     private void bumpPlatformUnderside(float oldFeet) {
@@ -718,6 +868,14 @@ public final class RunnerEngine {
         }
     }
 
+    private void updateStarBursts(float dt) {
+        for (int i = starBursts.size() - 1; i >= 0; i--) {
+            StarBurst burst = starBursts.get(i);
+            burst.remainingSeconds -= dt;
+            if (burst.remainingSeconds <= 0f) starBursts.remove(i);
+        }
+    }
+
     private boolean takeDamage(int points, boolean ignoreRecovery) {
         if (!ignoreRecovery && damageRecoverySeconds > 0f) return false;
         health -= points;
@@ -863,6 +1021,7 @@ public final class RunnerEngine {
         projectiles.clear();
         if (lives == 0) {
             bestDistance = Math.max(bestDistance, getDistance());
+            bestScore = Math.max(bestScore, getScore());
             mode = Mode.GAME_OVER;
             return;
         }
@@ -962,13 +1121,13 @@ public final class RunnerEngine {
                         Mode savedResumeMode, int savedHealth, float savedDamageRecovery,
                         float savedFarthestX, float savedVisibleWidth,
                         float[] savedAntagonistTimers, float[] savedProjectiles,
-                        float[] savedDefeatedAntagonists, int savedBonusMeters,
+                        float[] savedDefeatedAntagonists, int savedBonusPoints,
                         boolean savedFirstJumpCompleted, boolean savedJumpInProgress) {
         restore(courseSeed, savedLives, x, y, vy, remainingSeconds, savedRunSeconds,
                 savedTerrainMultiplier, savedMode, savedResumeMode, savedHealth,
                 savedDamageRecovery, savedFarthestX, savedVisibleWidth,
                 savedAntagonistTimers, savedProjectiles, savedDefeatedAntagonists,
-                savedBonusMeters, savedFirstJumpCompleted, savedJumpInProgress, null, null);
+                savedBonusPoints, savedFirstJumpCompleted, savedJumpInProgress, null, null);
     }
 
     public void restore(long courseSeed, int savedLives, float x, float y,
@@ -977,7 +1136,7 @@ public final class RunnerEngine {
                         Mode savedResumeMode, int savedHealth, float savedDamageRecovery,
                         float savedFarthestX, float savedVisibleWidth,
                         float[] savedAntagonistTimers, float[] savedProjectiles,
-                        float[] savedDefeatedAntagonists, int savedBonusMeters,
+                        float[] savedDefeatedAntagonists, int savedBonusPoints,
                         boolean savedFirstJumpCompleted, boolean savedJumpInProgress,
                         float[] savedEnemyState, float[] savedColoredProjectiles) {
         setVisibleWorldWidth(savedVisibleWidth);
@@ -985,7 +1144,7 @@ public final class RunnerEngine {
         lives = Math.max(0, Math.min(MAX_LIVES, savedLives));
         playerX = x;
         farthestX = Math.max(x, savedFarthestX);
-        bonusMeters = Math.max(0, savedBonusMeters);
+        bonusPoints = Math.max(0, savedBonusPoints);
         playerY = y;
         velocityY = vy;
         firstJumpCompleted = savedFirstJumpCompleted;
@@ -1060,6 +1219,46 @@ public final class RunnerEngine {
 
     public List<Hazard> getHazards() { return hazards; }
     public List<Platform> getPlatforms() { return Collections.unmodifiableList(platforms); }
+    public List<Star> getStars() { return Collections.unmodifiableList(stars); }
+    public List<StarBurst> getStarBursts() { return Collections.unmodifiableList(starBursts); }
+    public float[] getCollectedStars() {
+        float[] state = new float[collectedStars.size()];
+        for (int i = 0; i < state.length; i++) state[i] = collectedStars.get(i);
+        return state;
+    }
+    public void restoreCollectedStars(float[] state) {
+        collectedStars.clear();
+        if (state == null) return;
+        for (float x : state) {
+            if (Float.isNaN(x) || Float.isInfinite(x) || wasCollected(x)) continue;
+            collectedStars.add(x);
+        }
+        for (int i = stars.size() - 1; i >= 0; i--) {
+            if (wasCollected(stars.get(i).x)) stars.remove(i);
+        }
+    }
+    public float[] getStarBurstState() {
+        float[] state = new float[starBursts.size() * 4];
+        for (int i = 0; i < starBursts.size(); i++) {
+            StarBurst burst = starBursts.get(i);
+            state[i * 4] = burst.x;
+            state[i * 4 + 1] = burst.y;
+            state[i * 4 + 2] = burst.color.ordinal();
+            state[i * 4 + 3] = burst.remainingSeconds;
+        }
+        return state;
+    }
+    public void restoreStarBursts(float[] state) {
+        starBursts.clear();
+        if (state == null) return;
+        for (int i = 0; i + 3 < state.length; i += 4) {
+            int color = (int) state[i + 2];
+            if (color < 0 || color >= StarColor.values().length
+                    || state[i + 3] <= 0f || state[i + 3] > STAR_BURST_SECONDS) continue;
+            starBursts.add(new StarBurst(state[i], state[i + 1],
+                    StarColor.values()[color], state[i + 3]));
+        }
+    }
     public List<Antagonist> getAntagonists() { return Collections.unmodifiableList(antagonists); }
     public List<BonusPopup> getBonusPopups() { return Collections.unmodifiableList(bonusPopups); }
     public float[] getDefeatedAntagonists() {
@@ -1141,13 +1340,14 @@ public final class RunnerEngine {
         }
     }
     public void loadBestDistance(int distance) { bestDistance = Math.max(0, distance); }
+    public void loadBestScore(int points) { bestScore = Math.max(0, points); }
     public Mode getMode() { return mode; }
     public Mode getResumeMode() { return resumeMode; }
     public long getSeed() { return seed; }
     public int getLives() { return lives; }
     public float getPlayerX() { return playerX; }
     public float getFarthestX() { return farthestX; }
-    public int getBonusMeters() { return bonusMeters; }
+    public int getBonusPoints() { return bonusPoints; }
     public float getPlayerY() { return playerY; }
     public float getVelocityY() { return velocityY; }
     /** Nose-up angle for drawing the car; grounded motion follows the terrain. */
@@ -1180,9 +1380,9 @@ public final class RunnerEngine {
     public float getSpeed() { return getBaseSpeed() * terrainSpeedMultiplier; }
     public float getSpeedMetersPerSecond() { return getSpeed() / WORLD_UNITS_PER_METER; }
     public int getBestDistance() { return bestDistance; }
-    public int getDistance() {
-        return getCourseDistance() + bonusMeters;
-    }
+    public int getBestScore() { return bestScore; }
+    public int getDistance() { return getCourseDistance(); }
+    public int getScore() { return getCourseDistance() + bonusPoints; }
     private int getCourseDistance() {
         return Math.max(0, (int) ((farthestX - START_X) / WORLD_UNITS_PER_METER));
     }

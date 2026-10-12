@@ -16,9 +16,12 @@ import java.util.Locale;
 /** All drawing is resolution-independent and happens on the UI frame clock. */
 public final class RunnerView extends View {
     private static final String BEST_SCORE_KEY = "best_run_distance";
+    private static final String BEST_POINTS_KEY = "best_run_score";
     private static final String OLD_SCORES_KEY = "completed_attempt_distances";
     private static final int SKY = Color.rgb(132, 211, 246);
     private static final int YELLOW = Color.rgb(250, 210, 66);
+    private static final int WATER = Color.rgb(36, 140, 213);
+    private static final int WATER_EDGE = Color.rgb(171, 239, 255);
     private static final int FAR_CITY = Color.rgb(166, 203, 224);
     private static final int FAR_CITY_EDGE = Color.rgb(151, 194, 219);
     private static final int FAR_WINDOWS = Color.rgb(192, 223, 236);
@@ -65,9 +68,12 @@ public final class RunnerView extends View {
     private final Path carPath = new Path();
     private final Path palmPath = new Path();
     private final Path grassPath = new Path();
+    private final Path waterPath = new Path();
+    private final Path starPath = new Path();
     private final SharedPreferences scorePreferences;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
+    private float waveSeconds;
 
     public RunnerView(Context context) {
         super(context);
@@ -84,6 +90,7 @@ public final class RunnerView extends View {
             }
         }
         engine.loadBestDistance(best);
+        engine.loadBestScore(scorePreferences.getInt(BEST_POINTS_KEY, best));
         setFocusable(true);
         setContentDescription("Skybound Runner game. Tap anywhere to jump while moving.");
     }
@@ -100,8 +107,11 @@ public final class RunnerView extends View {
         if (lastFrameNanos != 0L) {
             float dt = Math.min((now - lastFrameNanos) / 1_000_000_000f, .05f);
             int previousBest = engine.getBestDistance();
+            int previousScore = engine.getBestScore();
+            if (engine.getMode() == RunnerEngine.Mode.RUNNING) waveSeconds += dt;
             engine.update(dt);
-            if (engine.getBestDistance() > previousBest) saveBestScore();
+            if (engine.getBestDistance() > previousBest
+                    || engine.getBestScore() > previousScore) saveBestScore();
         }
         lastFrameNanos = now;
 
@@ -120,7 +130,8 @@ public final class RunnerView extends View {
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN
                 || (engine.getMode() == RunnerEngine.Mode.GAME_OVER
-                && !engine.getBonusPopups().isEmpty())) {
+                && (!engine.getBonusPopups().isEmpty()
+                || !engine.getStarBursts().isEmpty()))) {
             postInvalidateOnAnimation();
         }
     }
@@ -231,6 +242,9 @@ public final class RunnerView extends View {
         canvas.save();
         canvas.translate(-cameraX, 0f);
         float right = cameraX + logicalWidth;
+        // Collectibles sit in front of the skyline and palms, but behind
+        // solid terrain and platforms.
+        drawStars(canvas, cameraX, right);
         float cursor = cameraX;
         paint.setColor(YELLOW);
         paint.setStyle(Paint.Style.FILL);
@@ -256,6 +270,7 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
+        drawWater(canvas, cameraX, right);
         drawGrass(canvas, cameraX, right);
         paint.setColor(YELLOW);
         paint.setStyle(Paint.Style.FILL);
@@ -279,8 +294,96 @@ public final class RunnerView extends View {
             paint.setColor(enemyColor(shot.type));
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
         }
+        drawStarBursts(canvas, cameraX, right);
         drawHovercar(canvas);
         canvas.restore();
+    }
+
+    private int starColor(RunnerEngine.StarColor color) {
+        switch (color) {
+            case RED: return Color.rgb(255, 103, 126);
+            case ORANGE: return Color.rgb(255, 176, 55);
+            case YELLOW: return Color.rgb(255, 241, 69);
+            case GREEN: return Color.rgb(100, 255, 129);
+            default: return Color.rgb(90, 194, 255);
+        }
+    }
+
+    private void drawStars(Canvas canvas, float left, float right) {
+        paint.setStyle(Paint.Style.FILL);
+        for (RunnerEngine.Star star : engine.getStars()) {
+            if (star.x + RunnerEngine.STAR_RADIUS < left) continue;
+            if (star.x - RunnerEngine.STAR_RADIUS > right) break;
+            paint.setColor(Color.argb(125, 255, 255, 255));
+            canvas.drawCircle(star.x, star.y, RunnerEngine.STAR_RADIUS + 3f, paint);
+            starPath.rewind();
+            for (int point = 0; point < 10; point++) {
+                double angle = -Math.PI / 2d + point * Math.PI / 5d;
+                float radius = point % 2 == 0 ? RunnerEngine.STAR_RADIUS : 5f;
+                float x = star.x + radius * (float) Math.cos(angle);
+                float y = star.y + radius * (float) Math.sin(angle);
+                if (point == 0) starPath.moveTo(x, y);
+                else starPath.lineTo(x, y);
+            }
+            starPath.close();
+            paint.setColor(starColor(star.color));
+            canvas.drawPath(starPath, paint);
+            paint.setColor(Color.WHITE);
+            canvas.drawCircle(star.x, star.y, 2f, paint);
+        }
+    }
+
+    private void drawStarBursts(Canvas canvas, float left, float right) {
+        paint.setStyle(Paint.Style.FILL);
+        for (RunnerEngine.StarBurst burst : engine.getStarBursts()) {
+            if (burst.x < left - 40f || burst.x > right + 40f) continue;
+            float progress = burst.getProgress();
+            int base = starColor(burst.color);
+            paint.setColor(Color.argb(Math.round(255f * (1f - progress)),
+                    Color.red(base), Color.green(base), Color.blue(base)));
+            for (int spark = 0; spark < 8; spark++) {
+                double angle = spark * Math.PI / 4d;
+                float radius = 5f + progress * 28f;
+                canvas.drawCircle(burst.x + radius * (float) Math.cos(angle),
+                        burst.y + radius * (float) Math.sin(angle),
+                        Math.max(1f, 3.5f * (1f - progress)), paint);
+            }
+        }
+    }
+
+    private void drawWater(Canvas canvas, float left, float right) {
+        for (RunnerEngine.Hazard hazard : engine.getHazards()) {
+            if (hazard.x >= right) break;
+            if (hazard.type != RunnerEngine.HazardType.HOLE || hazard.end() <= left) continue;
+            waterPath.rewind();
+            waterPath.moveTo(hazard.x, RunnerEngine.WORLD_HEIGHT);
+            for (float x = hazard.x; x < hazard.end(); x += 4f) {
+                waterPath.lineTo(x, waterY(x));
+            }
+            waterPath.lineTo(hazard.end(), waterY(hazard.end()));
+            waterPath.lineTo(hazard.end(), RunnerEngine.WORLD_HEIGHT);
+            waterPath.close();
+            paint.setColor(WATER);
+            paint.setStyle(Paint.Style.FILL);
+            canvas.drawPath(waterPath, paint);
+
+            waterPath.rewind();
+            waterPath.moveTo(hazard.x, waterY(hazard.x));
+            for (float x = hazard.x + 4f; x < hazard.end(); x += 4f) {
+                waterPath.lineTo(x, waterY(x));
+            }
+            waterPath.lineTo(hazard.end(), waterY(hazard.end()));
+            paint.setColor(WATER_EDGE);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(2f);
+            canvas.drawPath(waterPath, paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
+    }
+
+    private float waterY(float x) {
+        return RunnerEngine.WATER_SURFACE_Y
+                + 2f * (float) Math.sin(x * .115f + waveSeconds * 2.3f);
     }
 
     private void drawGrass(Canvas canvas, float left, float right) {
@@ -495,6 +598,8 @@ public final class RunnerView extends View {
         x = hudItem(canvas, "Best " + engine.getBestDistance() + " m", x);
         hudItem(canvas, String.format(Locale.US, "Speed %.1f m/s",
                 engine.getSpeedMetersPerSecond()), x);
+        text(canvas, "Score " + engine.getScore() + "  |  Best score "
+                + engine.getBestScore(), 24f, 71f, 17f, INK, Paint.Align.LEFT);
         drawLives(canvas, logicalWidth - 133f, 16f, 22f, 5f, -1f);
         drawHealth(canvas);
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
@@ -594,12 +699,15 @@ public final class RunnerView extends View {
             text(canvas, "Distance " + engine.getDistance() + " m  |  Best "
                     + engine.getBestDistance() + " m", midX, midY - 52f, 20f,
                     Color.WHITE, Paint.Align.CENTER);
+            text(canvas, "Score " + engine.getScore() + "  |  Best score "
+                    + engine.getBestScore(), midX, midY - 25f, 20f,
+                    Color.WHITE, Paint.Align.CENTER);
             button(canvas, "Restart", midX, midY);
         } else if (mode == RunnerEngine.Mode.TITLE) {
             text(canvas, "SKYBOUND RUNNER", midX, midY - 100f,
                     42f, INK, Paint.Align.CENTER);
             button(canvas, "Start", midX, midY);
-            text(canvas, "Jump onto ledges, over holes or out of dips", midX, midY + 100f,
+            text(canvas, "Jump for platforms and stars; avoid the water", midX, midY + 100f,
                     21f, INK, Paint.Align.CENTER);
         } else {
             int number = Math.max(1, (int) Math.ceil(engine.getCountdownSeconds()));
@@ -688,7 +796,9 @@ public final class RunnerView extends View {
         out.putFloat("damageRecovery", engine.getDamageRecoverySeconds());
         out.putFloatArray("defeatedAntagonists", engine.getDefeatedAntagonists());
         out.putFloat("farthestX", engine.getFarthestX());
-        out.putInt("bonusMeters", engine.getBonusMeters());
+        out.putInt("bonusPoints", engine.getBonusPoints());
+        out.putFloatArray("collectedStars", engine.getCollectedStars());
+        out.putFloatArray("starBursts", engine.getStarBurstState());
         out.putBoolean("firstJumpCompleted", engine.hasCompletedFirstJump());
         out.putBoolean("jumpInProgress", engine.isControlledJumpInProgress());
         out.putFloat("visibleWidth", engine.getVisibleWorldWidth());
@@ -719,13 +829,15 @@ public final class RunnerView extends View {
                     saved.getFloatArray("antagonistTimers"),
                     saved.getFloatArray("projectiles"),
                     saved.getFloatArray("defeatedAntagonists"),
-                    saved.getInt("bonusMeters", 0),
+                    saved.getInt("bonusPoints", saved.getInt("bonusMeters", 0)),
                     saved.getBoolean("firstJumpCompleted", false),
                     saved.getBoolean("jumpInProgress", false),
                     saved.getFloatArray("antagonistState"),
                     saved.getFloatArray("coloredProjectiles"));
             engine.restoreTerrainStop(saved.getBoolean("waitingForJump", false));
             engine.restoreBonusPopups(saved.getFloatArray("bonusPopups"));
+            engine.restoreCollectedStars(saved.getFloatArray("collectedStars"));
+            engine.restoreStarBursts(saved.getFloatArray("starBursts"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }
@@ -733,6 +845,8 @@ public final class RunnerView extends View {
     }
 
     private void saveBestScore() {
-        scorePreferences.edit().putInt(BEST_SCORE_KEY, engine.getBestDistance()).apply();
+        scorePreferences.edit()
+                .putInt(BEST_SCORE_KEY, engine.getBestDistance())
+                .putInt(BEST_POINTS_KEY, engine.getBestScore()).apply();
     }
 }
