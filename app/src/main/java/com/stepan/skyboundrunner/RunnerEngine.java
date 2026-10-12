@@ -856,7 +856,7 @@ public final class RunnerEngine {
 
     /** Fires at the motorcycle's current height; subsequent jumps do not steer the shot. */
     public boolean shoot() {
-        if (mode != Mode.RUNNING || !shootingEnabled || inWater) return false;
+        if (mode != Mode.RUNNING || !shootingEnabled) return false;
         playerShots.add(new PlayerShot(playerX + PLAYER_WIDTH + PLAYER_SHOT_RADIUS,
                 playerY + PLAYER_HEIGHT * .48f));
         return true;

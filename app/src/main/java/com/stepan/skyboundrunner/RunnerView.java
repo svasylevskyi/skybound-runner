@@ -1034,6 +1034,8 @@ public final class RunnerView extends View {
         } else if (mode == RunnerEngine.Mode.RUNNING && engine.hasShooting()
                 && Math.abs(x - (logicalWidth - 58f)) <= 39f
                 && Math.abs(y - (RunnerEngine.WORLD_HEIGHT - 53f)) <= 39f) {
+            // During a water crossing every tap still helps the motorcycle rise.
+            if (engine.isInWater()) engine.jump();
             if (engine.shoot()) shootPressSeconds = .14f;
         } else if (mode == RunnerEngine.Mode.RUNNING) {
             engine.jump();

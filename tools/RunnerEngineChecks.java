@@ -2917,6 +2917,21 @@ public final class RunnerEngineChecks {
         restored.continueGame();
         check(restored.getMode() == RunnerEngine.Mode.RUNNING,
                 "restored abilities can resume the same run");
+
+        long waterSeed = seedFor(RunnerEngine.HazardType.HOLE);
+        RunnerEngine waterCourse = started(waterSeed);
+        RunnerEngine.Hazard hole = waterCourse.getHazards().get(0);
+        RunnerEngine swimming = placedAt(waterSeed, hole.x + 5f,
+                RunnerEngine.WATER_SURFACE_Y - RunnerEngine.PLAYER_HEIGHT + 20f, 0f);
+        swimming.restoreWaterState(new float[]{1f, hole.x, RunnerEngine.BASE_SPEED,
+                RunnerEngine.BASE_SPEED * .25f, 0f});
+        swimming.restoreAbilityState(grantedAbilities(false, true));
+        check(swimming.isInWater(), "shooting test enters a water crossing");
+        float beforeTap = swimming.getPlayerY();
+        swimming.jump();
+        check(swimming.getPlayerY() < beforeTap && swimming.shoot()
+                        && swimming.getPlayerShots().size() == 1,
+                "shoot-button taps may still lift the player during a water crossing");
     }
 
     public static void main(String[] args) {
