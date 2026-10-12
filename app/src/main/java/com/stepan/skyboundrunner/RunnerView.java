@@ -4,8 +4,10 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.MotionEvent;
@@ -19,7 +21,13 @@ public final class RunnerView extends View {
     private static final String BEST_POINTS_KEY = "best_run_score";
     private static final String OLD_SCORES_KEY = "completed_attempt_distances";
     private static final int SKY = Color.rgb(105, 181, 220);
-    private static final int YELLOW = Color.rgb(250, 210, 66);
+    private static final int SAND_SURFACE = Color.rgb(251, 232, 159);
+    private static final int SAND_DEPTH = Color.rgb(239, 180, 114);
+    private static final int SAND_GRAIN_LIGHT = Color.argb(88, 255, 246, 199);
+    private static final int SAND_GRAIN_DARK = Color.argb(82, 205, 145, 86);
+    private static final int STONE_FILL = Color.rgb(255, 213, 145);
+    private static final int STONE_OUTLINE = Color.rgb(210, 123, 61);
+    private static final float STONE_SIDE = RunnerEngine.PLAYER_HEIGHT * 2f / 3f;
     private static final int WATER = Color.rgb(36, 140, 213);
     private static final int WATER_EDGE = Color.rgb(171, 239, 255);
     private static final int FAR_CITY = Color.rgb(119, 160, 187);
@@ -70,7 +78,11 @@ public final class RunnerView extends View {
     private final Path grassPath = new Path();
     private final Path waterPath = new Path();
     private final Path starPath = new Path();
+    private final Shader sandShader = new LinearGradient(0f, RunnerEngine.GROUND_Y,
+            0f, RunnerEngine.WORLD_HEIGHT, SAND_SURFACE, SAND_DEPTH,
+            Shader.TileMode.CLAMP);
     private final SharedPreferences scorePreferences;
+    private SceneryLayout.GrassPattern grassPattern;
     private long lastFrameNanos;
     private float logicalWidth = 960f;
     private float waveSeconds;
@@ -191,27 +203,24 @@ public final class RunnerView extends View {
         canvas.save();
         canvas.translate(-scrollX, 0f);
         paint.setStyle(Paint.Style.FILL);
-        float step = SceneryLayout.palmStep(logicalWidth);
-        for (int index = SceneryLayout.firstIndex(scrollX, step);
-                index <= SceneryLayout.lastIndex(scrollX + logicalWidth, step); index++) {
-            float x = SceneryLayout.groundedPalmX(seed, index, logicalWidth,
-                    engine.getHazards());
-            if (x < scrollX - SceneryLayout.PALM_EXTENT
-                    || x > scrollX + logicalWidth + SceneryLayout.PALM_EXTENT) continue;
-            int view = SceneryLayout.palmView(seed, index);
+        for (SceneryLayout.Palm palm : SceneryLayout.visiblePalms(seed,
+                engine.getHazards(), scrollX, scrollX + logicalWidth)) {
+            float x = palm.x;
+            int view = palm.view;
             float halfRoot = SceneryLayout.palmTrunkWidth(view) / 2f + 1f;
             float rootY = Math.max(engine.surfaceYAt(x - halfRoot),
                     engine.surfaceYAt(x + halfRoot)) + 2f;
-            drawPalm(canvas, x, rootY, view);
+            drawPalm(canvas, x, rootY, view, palm.phase);
         }
         canvas.restore();
     }
 
-    private void drawPalm(Canvas canvas, float x, float rootY, int view) {
+    private void drawPalm(Canvas canvas, float x, float rootY, int view, float phase) {
         float height = SceneryLayout.palmHeight(view);
         float lean = SceneryLayout.palmLean(view);
         float halfTrunk = SceneryLayout.palmTrunkWidth(view) / 2f;
-        float crownX = x + lean;
+        float breeze = (float) Math.sin(waveSeconds * 1.15f + phase) * 2.4f;
+        float crownX = x + lean + breeze;
         float crownY = rootY - height;
         palmPath.rewind();
         palmPath.moveTo(x - halfTrunk, rootY);
@@ -225,8 +234,9 @@ public final class RunnerView extends View {
         paint.setColor(PALM_TRUNK);
         canvas.drawPath(palmPath, paint);
         for (int i = 0; i < FROND_SPREAD[view].length; i++) {
-            float dx = FROND_SPREAD[view][i];
-            float dy = FROND_DROP[view][i];
+            float flutter = (float) Math.sin(waveSeconds * 1.4f + phase + i * .6f) * 1.8f;
+            float dx = FROND_SPREAD[view][i] + flutter;
+            float dy = FROND_DROP[view][i] + flutter * .4f;
             palmPath.rewind();
             palmPath.moveTo(crownX, crownY);
             palmPath.quadTo(crownX + dx * .55f, crownY - 18f,
@@ -247,8 +257,9 @@ public final class RunnerView extends View {
         // solid terrain and platforms.
         drawStars(canvas, cameraX, right);
         float cursor = cameraX;
-        paint.setColor(YELLOW);
         paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.WHITE);
+        paint.setShader(sandShader);
         for (RunnerEngine.Hazard hazard : engine.getHazards()) {
             if (hazard.type == RunnerEngine.HazardType.WALL) continue;
             if (hazard.end() <= cameraX) continue;
@@ -271,16 +282,23 @@ public final class RunnerView extends View {
             if (hazard.end() <= cameraX || hazard.x >= right) continue;
             drawTerrainShape(canvas, hazard);
         }
+        paint.setShader(null);
+        drawSandGrains(canvas, cameraX, right);
+        drawSurfaceStones(canvas, cameraX, right);
         // Water over the submerged hull is translucent during a crossing.
         if (engine.isInWater()) drawHovercar(canvas);
         drawWater(canvas, cameraX, right);
         drawGrass(canvas, cameraX, right);
-        paint.setColor(YELLOW);
         paint.setStyle(Paint.Style.FILL);
         for (RunnerEngine.Platform platform : engine.getPlatforms()) {
             if (platform.end() <= cameraX) continue;
             if (platform.x >= right) break;
+            paint.setColor(Color.WHITE);
+            paint.setShader(new LinearGradient(0f, platform.top, 0f, platform.bottom,
+                    SAND_SURFACE, SAND_DEPTH, Shader.TileMode.CLAMP));
             canvas.drawRect(platform.x, platform.top, platform.end(), platform.bottom, paint);
+            paint.setShader(null);
+            drawPlatformGrains(canvas, platform, cameraX, right);
         }
         for (RunnerEngine.Antagonist antagonist : engine.getAntagonists()) {
             if (antagonist.x + RunnerEngine.PLAYER_WIDTH < cameraX) continue;
@@ -301,6 +319,128 @@ public final class RunnerView extends View {
         drawEnemyBursts(canvas, cameraX, right);
         if (!engine.isInWater()) drawHovercar(canvas);
         canvas.restore();
+    }
+
+    private void drawSandGrains(Canvas canvas, float left, float right) {
+        long seed = engine.getSeed();
+        paint.setStyle(Paint.Style.FILL);
+        for (int column = (int) Math.floor(left / 13f);
+                column <= (int) Math.ceil(right / 13f); column++) {
+            float x = column * 13f + 3f * SceneryLayout.random01(seed, column,
+                    0x4BD37C9105AA6E28L);
+            float surface = engine.surfaceYAt(x);
+            if (Float.isNaN(surface)) continue;
+            for (int row = (int) Math.ceil((surface + STONE_SIDE + 5f) / 14f);
+                    row * 14f < RunnerEngine.WORLD_HEIGHT; row++) {
+                int id = column * 1049 + row;
+                float y = row * 14f + 4f * SceneryLayout.random01(seed, id,
+                        0x1CFB470D9A552E63L);
+                if (y <= surface + STONE_SIDE + 4f) continue;
+                paint.setColor(SceneryLayout.random01(seed, id,
+                        0x7316E9A4B50DC728L) < .5f
+                        ? SAND_GRAIN_LIGHT : SAND_GRAIN_DARK);
+                canvas.drawCircle(x, y, .7f + SceneryLayout.random01(seed, id,
+                        0x6932D5A0EB1478CFL) * 1.1f, paint);
+            }
+        }
+    }
+
+    private void drawPlatformGrains(Canvas canvas, RunnerEngine.Platform platform,
+                                    float left, float right) {
+        long seed = engine.getSeed() ^ ((long) Float.floatToIntBits(platform.x) << 24);
+        for (int column = (int) Math.ceil(Math.max(left, platform.x) / 12f);
+                column * 12f < Math.min(right, platform.end()); column++) {
+            float x = column * 12f;
+            float y = platform.top + 3f + SceneryLayout.random01(seed, column,
+                    0x9521FCD7E4B386A0L) * 4f;
+            paint.setColor(SAND_GRAIN_DARK);
+            canvas.drawCircle(x, y, .7f, paint);
+        }
+    }
+
+    private void drawSurfaceStones(Canvas canvas, float left, float right) {
+        float step = STONE_SIDE + 2f;
+        for (int index = (int) Math.floor(left / step) - 1;
+                index <= (int) Math.ceil(right / step) + 1; index++) {
+            float x = index * step + STONE_SIDE / 2f;
+            float start = engine.surfaceYAt(x - STONE_SIDE / 2f);
+            float end = engine.surfaceYAt(x + STONE_SIDE / 2f);
+            float surface = engine.surfaceYAt(x);
+            if (Float.isNaN(start) || Float.isNaN(end) || Float.isNaN(surface)) continue;
+            float angle = (float) Math.toDegrees(Math.atan2(end - start, STONE_SIDE));
+            // A vertical face or terrain corner is not a continuous top surface.
+            if (Math.abs(angle) > 65f
+                    || Math.abs(surface - (start + end) / 2f) > 3f) {
+                continue;
+            }
+            canvas.save();
+            canvas.translate(x, surface);
+            canvas.rotate(angle);
+            drawStone(canvas, -STONE_SIDE / 2f, 0f);
+            canvas.restore();
+        }
+        for (RunnerEngine.Hazard hazard : engine.getHazards()) {
+            if (hazard.type == RunnerEngine.HazardType.HOLE) continue;
+            if (hazard.x > right + STONE_SIDE) break;
+            if (hazard.end() < left - STONE_SIDE) continue;
+            float flatY = hazard.type == RunnerEngine.HazardType.WALL
+                    ? RunnerEngine.GROUND_Y - hazard.height
+                    : RunnerEngine.GROUND_Y + hazard.height;
+            float faceTop = Math.min(flatY, RunnerEngine.GROUND_Y);
+            if (hazard.entranceDegrees == 90) {
+                drawVerticalStones(canvas, hazard.x, faceTop, hazard.height,
+                        hazard.type == RunnerEngine.HazardType.DIP);
+            } else if (hazard.entranceDegrees > 65) {
+                drawSteepSlopeStones(canvas, hazard.x, RunnerEngine.GROUND_Y,
+                        hazard.flatStart, flatY, left, right);
+            }
+            if (hazard.exitDegrees == 90) {
+                drawVerticalStones(canvas, hazard.end(), faceTop, hazard.height,
+                        hazard.type == RunnerEngine.HazardType.WALL);
+            } else if (hazard.exitDegrees > 65) {
+                drawSteepSlopeStones(canvas, hazard.flatEnd, flatY,
+                        hazard.end(), RunnerEngine.GROUND_Y, left, right);
+            }
+        }
+    }
+
+    private void drawSteepSlopeStones(Canvas canvas, float fromX, float fromY,
+                                      float toX, float toY, float left, float right) {
+        float dx = toX - fromX;
+        float dy = toY - fromY;
+        float length = (float) Math.hypot(dx, dy);
+        float angle = (float) Math.toDegrees(Math.atan2(dy, dx));
+        for (float along = STONE_SIDE / 2f;
+                along <= length - STONE_SIDE / 2f; along += STONE_SIDE + 2f) {
+            float x = fromX + dx * along / length;
+            if (x < left - STONE_SIDE || x > right + STONE_SIDE) continue;
+            canvas.save();
+            canvas.translate(x, fromY + dy * along / length);
+            canvas.rotate(angle);
+            drawStone(canvas, -STONE_SIDE / 2f, 0f);
+            canvas.restore();
+        }
+    }
+
+    private void drawVerticalStones(Canvas canvas, float x, float top, float height,
+                                    boolean bodyToLeft) {
+        float bottom = top + height;
+        for (float y = top + 1f; y + STONE_SIDE <= bottom + 1f; y += STONE_SIDE + 2f) {
+            drawStone(canvas, bodyToLeft ? x - STONE_SIDE : x, y);
+        }
+    }
+
+    private void drawStone(Canvas canvas, float left, float top) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(STONE_FILL);
+        canvas.drawRoundRect(left, top, left + STONE_SIDE, top + STONE_SIDE,
+                3.5f, 3.5f, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1.8f);
+        paint.setColor(STONE_OUTLINE);
+        canvas.drawRoundRect(left, top, left + STONE_SIDE, top + STONE_SIDE,
+                3.5f, 3.5f, paint);
+        paint.setStyle(Paint.Style.FILL);
     }
 
     private int starColor(RunnerEngine.StarColor color) {
@@ -406,11 +546,13 @@ public final class RunnerView extends View {
     }
 
     private void drawGrass(Canvas canvas, float left, float right) {
+        if (grassPattern == null || grassPattern.seed != engine.getSeed()) {
+            grassPattern = new SceneryLayout.GrassPattern(engine.getSeed());
+        }
         paint.setStyle(Paint.Style.FILL);
         for (SceneryLayout.GrassSegment segment :
-                SceneryLayout.visibleGrass(engine.getHazards(), left, right)) {
-            // The narrow base joins the blades continuously along flat and
-            // gentle terrain, but never bridges a hole or a steep slope.
+                SceneryLayout.visibleGrass(grassPattern, engine.getHazards(), left, right)) {
+            // Each patch clips to supported ground and slopes no steeper than 45°.
             grassPath.rewind();
             grassPath.moveTo(segment.fromX, segment.fromY);
             grassPath.lineTo(segment.toX, segment.toY);
@@ -420,17 +562,27 @@ public final class RunnerView extends View {
             paint.setColor(GRASS_BASE);
             canvas.drawPath(grassPath, paint);
 
-            paint.setColor(GRASS_TIPS);
             for (float x = (float) Math.ceil(segment.fromX / 7f) * 7f;
                     x < segment.toX; x += 7f) {
-                float bladeLeft = Math.max(segment.fromX, x - 2.5f);
-                float bladeRight = Math.min(segment.toX, x + 2.5f);
+                int blade = (int) (x / 7f) + segment.patchIndex * 23;
+                float width = 2.5f + 2.5f * SceneryLayout.random01(
+                        grassPattern.seed, blade, 0xC6E93027BD86154AL);
+                float bladeLeft = Math.max(segment.fromX, x - width);
+                float bladeRight = Math.min(segment.toX, x + width);
                 if (bladeRight <= bladeLeft) continue;
+                float height = SceneryLayout.GRASS_HEIGHT * (.3f + .7f
+                        * SceneryLayout.random01(grassPattern.seed, blade,
+                        0xE284F6C53BD917A0L));
+                float lean = (SceneryLayout.random01(grassPattern.seed, blade,
+                        0x58F137CB704ADE26L) - .5f) * 3f;
                 grassPath.rewind();
                 grassPath.moveTo(bladeLeft, segment.surfaceYAt(bladeLeft) - 2f);
-                grassPath.lineTo(x, segment.surfaceYAt(x) - SceneryLayout.GRASS_HEIGHT);
+                grassPath.lineTo(Math.max(bladeLeft, Math.min(bladeRight, x + lean)),
+                        segment.surfaceYAt(x) - height);
                 grassPath.lineTo(bladeRight, segment.surfaceYAt(bladeRight) - 2f);
                 grassPath.close();
+                paint.setColor(SceneryLayout.random01(grassPattern.seed, blade,
+                        0x42A73BD861C9E0F5L) < .6f ? GRASS_TIPS : GRASS_BASE);
                 canvas.drawPath(grassPath, paint);
             }
         }
