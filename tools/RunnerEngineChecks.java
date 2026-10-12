@@ -98,7 +98,12 @@ public final class RunnerEngineChecks {
     private static void testSceneryLayout() {
         long[] seeds = {1L, 328493L, Long.MIN_VALUE, Long.MAX_VALUE};
         float[] widths = {540f, 720f, 960f, 1170f, 1440f};
+        boolean[] viewsSeen = new boolean[5];
+        boolean movedPalmAwayFromHole = false;
         for (long seed : seeds) {
+            RunnerEngine course = new RunnerEngine();
+            course.startNewGame(seed);
+            course.generateAhead(75_000f);
             for (float width : widths) {
                 float step = SceneryLayout.palmStep(width);
                 for (int frame = 0; frame < 400; frame++) {
@@ -107,11 +112,28 @@ public final class RunnerEngineChecks {
                     int visible = 0;
                     for (int index = SceneryLayout.firstIndex(left, step);
                             index <= SceneryLayout.lastIndex(left + width, step); index++) {
-                        float x = SceneryLayout.palmX(seed, index, width);
+                        float x = SceneryLayout.groundedPalmX(seed, index, width,
+                                course.getHazards());
+                        movedPalmAwayFromHole |= x != SceneryLayout.palmX(seed, index, width);
                         if (x >= left && x < left + width) centers++;
-                        if (x + 70f >= left && x - 70f <= left + width) visible++;
-                        check(x == SceneryLayout.palmX(seed, index, width),
+                        if (x + SceneryLayout.PALM_EXTENT >= left
+                                && x - SceneryLayout.PALM_EXTENT <= left + width) visible++;
+                        check(x == SceneryLayout.groundedPalmX(seed, index, width,
+                                        course.getHazards()),
                                 "palm positions repeat for the same course");
+                        for (RunnerEngine.Hazard hazard : course.getHazards()) {
+                            if (hazard.type == RunnerEngine.HazardType.HOLE) {
+                                check(x + SceneryLayout.PALM_EXTENT <= hazard.x
+                                                || x - SceneryLayout.PALM_EXTENT >= hazard.end(),
+                                        "palm canopy stays clear of holes");
+                            }
+                        }
+                        int view = SceneryLayout.palmView(seed, index);
+                        viewsSeen[view] = true;
+                        float halfRoot = SceneryLayout.palmTrunkWidth(view) / 2f + 1f;
+                        check(!Float.isNaN(course.surfaceYAt(x - halfRoot))
+                                        && !Float.isNaN(course.surfaceYAt(x + halfRoot)),
+                                "palm trunk is supported by terrain");
                     }
                     check(centers >= 1 && visible <= 5,
                             "each scrolling screen contains one to five palm trees");
@@ -130,6 +152,17 @@ public final class RunnerEngineChecks {
                 }
             }
         }
+        float shortest = Float.MAX_VALUE;
+        float tallest = 0f;
+        for (int view = 0; view < viewsSeen.length; view++) {
+            check(viewsSeen[view], "all five seeded palm shapes appear");
+            shortest = Math.min(shortest, SceneryLayout.palmHeight(view));
+            tallest = Math.max(tallest, SceneryLayout.palmHeight(view));
+        }
+        check(tallest - shortest == 5f
+                        && SceneryLayout.palmTrunkWidth(0) != SceneryLayout.palmTrunkWidth(1),
+                "the five palm shapes vary in height by at most five pixels and in trunk width");
+        check(movedPalmAwayFromHole, "hole avoidance is exercised by a generated course");
     }
 
     private static float horizontalRun(float height, int degrees) {

@@ -677,7 +677,8 @@ public final class RunnerEngine {
         controlledJumpInProgress = false;
     }
 
-    private float surfaceYAt(float center) {
+    // The scenery uses the same terrain surface as movement to plant its roots.
+    float surfaceYAt(float center) {
         for (Hazard hazard : hazards) {
             if (center < hazard.x) break;
             if (center >= hazard.x && center < hazard.end()) {
