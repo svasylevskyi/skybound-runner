@@ -66,6 +66,8 @@ public final class RunnerView extends View {
     private static final int LIFE_GRAY = Color.rgb(146, 151, 159);
     private static final int EMPTY_HEALTH = Color.argb(128, 218, 223, 227);
     private static final int INK = Color.rgb(20, 44, 94);
+    private static final int JUMP_ICON = Color.rgb(32, 224, 236);
+    private static final int SHOOT_ICON = Color.rgb(69, 130, 255);
 
     private final RunnerEngine engine = new RunnerEngine();
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -86,6 +88,7 @@ public final class RunnerView extends View {
     private long lastFrameNanos;
     private float logicalWidth = 960f;
     private float waveSeconds;
+    private float shootPressSeconds;
 
     public RunnerView(Context context) {
         super(context);
@@ -118,6 +121,7 @@ public final class RunnerView extends View {
         long now = System.nanoTime();
         if (lastFrameNanos != 0L) {
             float dt = Math.min((now - lastFrameNanos) / 1_000_000_000f, .05f);
+            shootPressSeconds = Math.max(0f, shootPressSeconds - dt);
             int previousBest = engine.getBestDistance();
             int previousScore = engine.getBestScore();
             if (engine.getMode() == RunnerEngine.Mode.RUNNING) waveSeconds += dt;
@@ -257,6 +261,7 @@ public final class RunnerView extends View {
         // Collectibles sit in front of the skyline and palms, but behind
         // solid terrain and platforms.
         drawStars(canvas, cameraX, right);
+        drawAbilityIcons(canvas, cameraX, right);
         float cursor = cameraX;
         paint.setStyle(Paint.Style.FILL);
         paint.setColor(Color.WHITE);
@@ -315,6 +320,12 @@ public final class RunnerView extends View {
         for (RunnerEngine.Projectile shot : engine.getProjectiles()) {
             paint.setColor(enemyColor(shot.type));
             canvas.drawCircle(shot.getX(), shot.getY(), RunnerEngine.PROJECTILE_RADIUS, paint);
+        }
+        for (RunnerEngine.PlayerShot shot : engine.getPlayerShots()) {
+            paint.setColor(AVATAR);
+            canvas.drawCircle(shot.getX(), shot.y, RunnerEngine.PLAYER_SHOT_RADIUS, paint);
+            paint.setColor(BIKE_ACCENT);
+            canvas.drawCircle(shot.getX() - 1f, shot.y - 1f, 1.5f, paint);
         }
         drawStarBursts(canvas, cameraX, right);
         drawEnemyBursts(canvas, cameraX, right);
@@ -492,6 +503,42 @@ public final class RunnerView extends View {
             paint.setColor(Color.WHITE);
             canvas.drawCircle(star.x, star.y, 2f, paint);
         }
+    }
+
+    private void drawAbilityIcons(Canvas canvas, float left, float right) {
+        for (RunnerEngine.AbilityIcon icon : engine.getAbilityIcons()) {
+            if (icon.x + RunnerEngine.ABILITY_RADIUS < left
+                    || icon.x - RunnerEngine.ABILITY_RADIUS > right) continue;
+            drawAbilityGlyph(canvas, icon.x, icon.y, RunnerEngine.ABILITY_RADIUS,
+                    icon.type, 255);
+        }
+    }
+
+    private void drawAbilityGlyph(Canvas canvas, float x, float y, float radius,
+                                  RunnerEngine.AbilityType type, int alpha) {
+        int color = type == RunnerEngine.AbilityType.DOUBLE_JUMP ? JUMP_ICON : SHOOT_ICON;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb(alpha * 200 / 255, 13, 45, 105));
+        canvas.drawCircle(x, y, radius, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2.5f);
+        paint.setColor(Color.argb(alpha, Color.red(color), Color.green(color),
+                Color.blue(color)));
+        canvas.drawCircle(x, y, radius - 1.5f, paint);
+        paint.setStrokeWidth(3.3f);
+        if (type == RunnerEngine.AbilityType.DOUBLE_JUMP) {
+            for (int i = 0; i < 2; i++) {
+                float row = y + (i == 0 ? 5f : -3f) * radius / 16.5f;
+                canvas.drawLine(x - radius * .45f, row + radius * .12f,
+                        x, row - radius * .23f, paint);
+                canvas.drawLine(x, row - radius * .23f,
+                        x + radius * .45f, row + radius * .12f, paint);
+            }
+        } else {
+            canvas.drawCircle(x - radius * .12f, y, radius * .28f, paint);
+            canvas.drawLine(x + radius * .2f, y, x + radius * .63f, y, paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
     }
 
     private void drawStarBursts(Canvas canvas, float left, float right) {
@@ -801,6 +848,16 @@ public final class RunnerView extends View {
                 engine.getSpeedMetersPerSecond()), x);
         drawLives(canvas, logicalWidth - 133f, 16f, 22f, 5f, -1f);
         drawHealth(canvas);
+        if (engine.hasDoubleJump()) {
+            drawAbilityGlyph(canvas, 45f, RunnerEngine.WORLD_HEIGHT - 43f, 21f,
+                    RunnerEngine.AbilityType.DOUBLE_JUMP, 255);
+        }
+        if (engine.hasShooting()) {
+            drawAbilityGlyph(canvas, engine.hasDoubleJump() ? 96f : 45f,
+                    RunnerEngine.WORLD_HEIGHT - 43f, 21f,
+                    RunnerEngine.AbilityType.SHOOTING, 255);
+            drawShootButton(canvas);
+        }
         if (engine.getMode() == RunnerEngine.Mode.RUNNING
                 || engine.getMode() == RunnerEngine.Mode.COUNTDOWN
                 || engine.getMode() == RunnerEngine.Mode.LIFE_LOSS) {
@@ -813,6 +870,28 @@ public final class RunnerView extends View {
                             : "Tap anywhere to jump", logicalWidth / 2f, 122f,
                     18f, INK, Paint.Align.CENTER);
         }
+        if (engine.getMode() == RunnerEngine.Mode.RUNNING
+                && engine.getDoubleJumpHintSeconds() > 0f) {
+            text(canvas, "Tap mid-air to double jump", logicalWidth / 2f, 155f,
+                    20f, INK, Paint.Align.CENTER);
+        }
+    }
+
+    private void drawShootButton(Canvas canvas) {
+        float cx = logicalWidth - 58f;
+        float cy = RunnerEngine.WORLD_HEIGHT - 53f;
+        float radius = shootPressSeconds > 0f ? 28f : 33f;
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb(shootPressSeconds > 0f ? 190 : 125, 35, 57, 126));
+        canvas.drawCircle(cx, cy, radius, paint);
+        paint.setColor(Color.WHITE);
+        canvas.drawCircle(cx - 7f, cy, 5f, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3f);
+        canvas.drawLine(cx - 1f, cy, cx + 14f, cy, paint);
+        canvas.drawLine(cx + 8f, cy - 7f, cx + 15f, cy, paint);
+        canvas.drawLine(cx + 8f, cy + 7f, cx + 15f, cy, paint);
+        paint.setStyle(Paint.Style.FILL);
     }
 
     private void drawHealth(Canvas canvas) {
@@ -952,6 +1031,10 @@ public final class RunnerView extends View {
                 && x >= logicalWidth - 62f && y >= 0f && y <= 64f) {
             engine.pause();
             lastFrameNanos = 0L;
+        } else if (mode == RunnerEngine.Mode.RUNNING && engine.hasShooting()
+                && Math.abs(x - (logicalWidth - 58f)) <= 39f
+                && Math.abs(y - (RunnerEngine.WORLD_HEIGHT - 53f)) <= 39f) {
+            if (engine.shoot()) shootPressSeconds = .14f;
         } else if (mode == RunnerEngine.Mode.RUNNING) {
             engine.jump();
         } else if (mode == RunnerEngine.Mode.PAUSED
@@ -1016,6 +1099,7 @@ public final class RunnerView extends View {
         out.putFloatArray("projectiles", engine.getProjectileState());
         out.putFloatArray("coloredProjectiles", engine.getColoredProjectileState());
         out.putFloatArray("bonusPopups", engine.getBonusPopupState());
+        out.putFloatArray("abilities", engine.getAbilityState());
         out.putString("mode", engine.getMode().name());
         out.putString("resumeMode", engine.getResumeMode().name());
     }
@@ -1051,6 +1135,7 @@ public final class RunnerView extends View {
             engine.restoreCollectedStars(saved.getFloatArray("collectedStars"));
             engine.restoreStarBursts(saved.getFloatArray("starBursts"));
             engine.restoreEnemyBursts(saved.getFloatArray("enemyBursts"));
+            engine.restoreAbilityState(saved.getFloatArray("abilities"));
         } catch (IllegalArgumentException ignored) {
             // Malformed/stale saved UI state simply starts at the title screen.
         }

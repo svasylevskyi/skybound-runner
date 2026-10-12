@@ -2731,7 +2731,197 @@ public final class RunnerEngineChecks {
         check(checkedCourses == 40, "checked forty courses before enemy spawns");
     }
 
+    private static float[] grantedAbilities(boolean doubleJump, boolean shooting) {
+        float[] state = new float[12];
+        state[0] = doubleJump ? 1f : 0f;
+        state[1] = shooting ? 1f : 0f;
+        state[6] = 10140f;
+        state[7] = 15140f;
+        for (int i = 8; i < 12; i++) state[i] = Float.NaN;
+        return state;
+    }
+
+    private static void testAbilityPickupAndJump() {
+        RunnerEngine course = placedAt(31L, 9640f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+        course.generateAhead(20_000f);
+        RunnerEngine.AbilityIcon icon = course.getAbilityIcons().stream()
+                .filter(a -> a.type == RunnerEngine.AbilityType.DOUBLE_JUMP)
+                .findFirst().orElseThrow(() -> new AssertionError("double jump icon missing"));
+        check(icon.x >= 10140f && RunnerEngine.ABILITY_RADIUS
+                        == RunnerEngine.STAR_RADIUS * 1.5f,
+                "double jump appears after 1000 m at 1.5 times star size");
+        float required = course.getVisibleWorldWidth() / 2f + RunnerEngine.ABILITY_RADIUS;
+        for (RunnerEngine.Star star : course.getStars()) {
+            check(Math.abs(icon.x - star.x) >= required + RunnerEngine.STAR_RADIUS,
+                    "ability icon has a half-screen clear gap from stars");
+        }
+        for (RunnerEngine.Antagonist enemy : course.getAntagonists()) {
+            float patrol = enemy.type == RunnerEngine.EnemyType.MOVING ? 50f : 0f;
+            check(Math.abs(icon.x - enemy.spawnX - RunnerEngine.PLAYER_WIDTH / 2f)
+                            >= required + RunnerEngine.PLAYER_WIDTH / 2f + patrol,
+                    "ability icon has a half-screen clear gap from enemies and patrols");
+        }
+        float ground = course.surfaceYAt(icon.x);
+        float bottom = icon.y + RunnerEngine.ABILITY_RADIUS;
+        check(Float.isNaN(ground)
+                        ? Math.abs(bottom - (RunnerEngine.GROUND_Y - RunnerEngine.JUMP_HEIGHT))
+                        < .01f
+                        : bottom >= ground - RunnerEngine.JUMP_HEIGHT
+                        && bottom <= ground - RunnerEngine.PLAYER_HEIGHT / 2f,
+                "ability icon follows the star height rules, including water holes");
+
+        RunnerEngine bothIcons = placedAt(31L, 14900f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f);
+        bothIcons.generateAhead(30_000f);
+        RunnerEngine.AbilityIcon shootingIcon = bothIcons.getAbilityIcons().stream()
+                .filter(a -> a.type == RunnerEngine.AbilityType.SHOOTING)
+                .findFirst().orElseThrow(() -> new AssertionError("shooting icon missing"));
+        check(shootingIcon.x >= 15140f,
+                "shooting ability appears only after 1500 m");
+        for (RunnerEngine.AbilityIcon other : bothIcons.getAbilityIcons()) {
+            if (other == shootingIcon) continue;
+            check(Math.abs(shootingIcon.x - other.x)
+                            >= bothIcons.getVisibleWorldWidth() / 2f
+                            + 2f * RunnerEngine.ABILITY_RADIUS,
+                    "the two ability icons keep a half-screen gap");
+        }
+
+        RunnerEngine pickup = placedAt(31L, icon.x - 16f,
+                icon.y - RunnerEngine.PLAYER_HEIGHT / 2f, 0f);
+        pickup.restoreAbilityState(course.getAbilityState());
+        pickup.update(1f / 120f);
+        check(pickup.hasDoubleJump() && pickup.getDoubleJumpHintSeconds() > 1.9f
+                        && pickup.getAbilityIcons().stream().noneMatch(a ->
+                        a.type == RunnerEngine.AbilityType.DOUBLE_JUMP),
+                "touching the icon unlocks double jump and shows the first pickup hint");
+        RunnerEngine replay = started(31L);
+        replay.restoreAbilityState(pickup.getAbilityState());
+        check(replay.hasDoubleJump() && replay.getDoubleJumpHintSeconds() > 1.9f,
+                "pickup and hint survive saved-state restoration");
+        replay.jump();
+        replay.update(.13f);
+        float beforeSecond = replay.getVelocityY();
+        replay.jump();
+        check(beforeSecond > -490f && replay.getVelocityY() < beforeSecond
+                        && replay.hasUsedSecondJump(),
+                "a second midair tap starts a full second jump");
+        replay.update(.05f);
+        float beforeThird = replay.getVelocityY();
+        replay.jump();
+        check(replay.getVelocityY() == beforeThird,
+                "a third midair tap cannot start another jump");
+        for (int i = 0; i < 160 && replay.isControlledJumpInProgress(); i++) {
+            replay.update(1f / 120f);
+        }
+        check(!replay.hasUsedSecondJump(), "landing refreshes the available second jump");
+        replay.update(2f);
+        check(replay.getDoubleJumpHintSeconds() == 0f,
+                "first double jump hint expires after two seconds of play");
+    }
+
+    private static void testAbilityDamageAndShooting() {
+        RunnerEngine hit = enemyOnOpenGround(130f);
+        hit.restoreAbilityState(grantedAbilities(true, true));
+        for (int i = 0; i < 300 && hit.getDefeatedAntagonists().length == 0; i++) {
+            hit.update(1f / 120f);
+        }
+        check(hit.getHealth() == 8 && hit.hasDoubleJump() && !hit.hasShooting(),
+                "a two-point enemy hit removes shooting before double jump");
+        check(!hit.shoot(), "shooting stops immediately when its ability is lost");
+        float[] stateAfterLoss = hit.getAbilityState();
+        check(stateAfterLoss[7] >= hit.getFarthestX() + 5000f - .1f,
+                "lost shooting icon is deferred by at least 500 m");
+        RunnerEngine secondHit = enemyOnOpenGround(130f);
+        secondHit.restoreAbilityState(grantedAbilities(true, false));
+        for (int i = 0; i < 300 && secondHit.getDefeatedAntagonists().length == 0; i++) {
+            secondHit.update(1f / 120f);
+        }
+        check(!secondHit.hasDoubleJump() && secondHit.getAbilityState()[6]
+                        >= secondHit.getFarthestX() + 5000f - .1f,
+                "another two-point hit removes double jump and defers its icon");
+
+        RunnerEngine firstProjectile = new RunnerEngine();
+        float start = 140f;
+        float head = RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT;
+        float[] incoming = {start + 16f, head + 20f, -380f, 0f};
+        firstProjectile.restore(51L, RunnerEngine.MAX_LIVES, start, head, 0f, 0f,
+                0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                10, 0f, start, 960f, null, incoming);
+        firstProjectile.restoreAbilityState(grantedAbilities(true, true));
+        firstProjectile.continueGame();
+        firstProjectile.update(1f / 120f);
+        check(firstProjectile.getHealth() == 9 && firstProjectile.hasShooting(),
+                "one projectile damage point does not remove an ability");
+        RunnerEngine secondProjectile = new RunnerEngine();
+        secondProjectile.restore(51L, RunnerEngine.MAX_LIVES, start, head, 0f, 0f,
+                0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING,
+                9, 0f, start, 960f, null, incoming);
+        secondProjectile.restoreAbilityState(firstProjectile.getAbilityState());
+        secondProjectile.continueGame();
+        secondProjectile.update(1f / 120f);
+        check(secondProjectile.getHealth() == 8 && !secondProjectile.hasShooting()
+                        && secondProjectile.hasDoubleJump(),
+                "two separate projectile hits count toward the two-point ability loss");
+
+        RunnerEngine orange = enemyOnOpenGround(230f);
+        orange.restoreAbilityState(grantedAbilities(false, true));
+        check(orange.shoot(), "shoot action is enabled after pickup");
+        float shotHeight = orange.getPlayerShots().get(0).y;
+        orange.jump();
+        orange.update(.08f);
+        check(!orange.getPlayerShots().isEmpty()
+                        && orange.getPlayerShots().get(0).y == shotHeight,
+                "player projectile keeps the height of its initial shot during a jump");
+        for (int i = 0; i < 180 && orange.getDefeatedAntagonists().length == 0; i++) {
+            orange.update(1f / 120f);
+        }
+        check(orange.getBonusPoints() == 500 && orange.getEnemyBursts().size() == 1
+                        && orange.getBonusPopups().get(0).amount == 500
+                        && orange.getHealth() == RunnerEngine.MAX_HEALTH,
+                "orange enemy shot gives +500 with the existing popup and firework");
+
+        RunnerEngine red = movingEnemyOnOpenGround(250f, false);
+        red.restoreAbilityState(grantedAbilities(false, true));
+        check(red.shoot(), "red enemy can be targeted with a player projectile");
+        for (int i = 0; i < 180 && red.getDefeatedAntagonists().length == 0; i++) {
+            red.update(1f / 120f);
+        }
+        check(red.getBonusPoints() == 600 && red.getEnemyBursts().size() == 1
+                        && red.getBonusPopups().get(0).amount == 600,
+                "red enemy shot gives +600 with a red popup and firework");
+
+        RunnerEngine saved = started(99L);
+        saved.restoreAbilityState(grantedAbilities(true, true));
+        saved.jump();
+        saved.update(.12f);
+        saved.jump();
+        saved.shoot();
+        float[] savedAbilities = saved.getAbilityState();
+        RunnerEngine restored = new RunnerEngine();
+        restored.restore(saved.getSeed(), saved.getLives(), saved.getPlayerX(),
+                saved.getPlayerY(), saved.getVelocityY(), saved.getCountdownSeconds(),
+                saved.getElapsedRunSeconds(), saved.getTerrainSpeedMultiplier(),
+                saved.getMode(), saved.getResumeMode(), saved.getHealth(),
+                saved.getDamageRecoverySeconds(), saved.getFarthestX(),
+                saved.getVisibleWorldWidth(), saved.getAntagonistTimers(),
+                saved.getProjectileState(), saved.getDefeatedAntagonists(),
+                saved.getBonusPoints(), saved.hasCompletedFirstJump(),
+                saved.isControlledJumpInProgress());
+        restored.restoreAbilityState(savedAbilities);
+        check(restored.hasDoubleJump() && restored.hasShooting()
+                        && restored.hasUsedSecondJump() && restored.getPlayerShots().size() == 1
+                        && restored.getPlayerShots().get(0).y
+                        == saved.getPlayerShots().get(0).y,
+                "paused restoration keeps both abilities, second-jump use and active shot");
+        restored.continueGame();
+        check(restored.getMode() == RunnerEngine.Mode.RUNNING,
+                "restored abilities can resume the same run");
+    }
+
     public static void main(String[] args) {
+        testAbilityPickupAndJump();
+        testAbilityDamageAndShooting();
         testLayout();
         testSceneryLayout();
         testGrassCoverage();
