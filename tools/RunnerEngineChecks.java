@@ -571,6 +571,133 @@ public final class RunnerEngineChecks {
         check(restored.getLives() == RunnerEngine.MAX_LIVES, "restored slope can be continued");
     }
 
+    private static void testBallisticDepartures() {
+        long dipSeed = seedForSlopes(RunnerEngine.HazardType.DIP, 70, 30);
+        RunnerEngine course = started(dipSeed);
+        RunnerEngine.Hazard dip = course.getHazards().get(0);
+        RunnerEngine fast = new RunnerEngine();
+        float lipX = dip.x - RunnerEngine.PLAYER_WIDTH / 2f - 1f;
+        fast.restore(dipSeed, RunnerEngine.MAX_LIVES, lipX,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT, 0f,
+                0f, 30d, 1.45f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        fast.continueGame();
+        float approachSpeed = fast.getSpeed();
+        fast.update(1f / 120f);
+        check(fast.hasAirborneMomentum() && fast.getVelocityY() > 0f
+                        && fast.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                        < dip.surfaceYAt(fast.getPlayerX() + RunnerEngine.PLAYER_WIDTH / 2f),
+                "fast approach to a steep decline launches above the descending terrain");
+        float flightSpeed = fast.getSpeed();
+        check(flightSpeed > RunnerEngine.BASE_SPEED && flightSpeed <= approachSpeed,
+                "takeoff keeps the speed reached at the downhill break");
+        float launchedX = fast.getPlayerX();
+        float launchedY = fast.getPlayerY();
+        fast.update(1f / 120f);
+        check(Math.abs(fast.getPlayerX() - launchedX - flightSpeed / 120f) < .02f
+                        && Math.abs(fast.getPlayerY() - launchedY
+                        - (fast.getVelocityY() - 4.5f) / 120f) < .05f
+                        && Math.abs(fast.getSpeed() - flightSpeed) < .01f,
+                "airborne speed stays at the takeoff speed while gravity curves the flight");
+
+        long gentleSeed = seedForSlopes(RunnerEngine.HazardType.DIP, 30, 45);
+        RunnerEngine.Hazard gentleDip = started(gentleSeed).getHazards().get(0);
+        RunnerEngine gentle = new RunnerEngine();
+        gentle.restore(gentleSeed, RunnerEngine.MAX_LIVES,
+                gentleDip.x - RunnerEngine.PLAYER_WIDTH / 2f - 1f,
+                RunnerEngine.GROUND_Y - RunnerEngine.PLAYER_HEIGHT,
+                0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        gentle.continueGame();
+        gentle.update(1f / 120f);
+        check(!gentle.hasAirborneMomentum(),
+                "the motorcycle remains supported at a gentle downhill break");
+
+        long wallSeed = seedForSlopes(RunnerEngine.HazardType.WALL, 30, 45);
+        RunnerEngine.Hazard wall = started(wallSeed).getHazards().get(0);
+        float downhillCenter = (wall.flatEnd + wall.end()) / 2f;
+        float slopeX = downhillCenter - RunnerEngine.PLAYER_WIDTH / 2f;
+        float slopeY = wall.surfaceYAt(downhillCenter) - RunnerEngine.PLAYER_HEIGHT;
+        RunnerEngine slowJump = new RunnerEngine();
+        slowJump.restore(wallSeed, RunnerEngine.MAX_LIVES, slopeX, slopeY,
+                0f, 0f, 0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        slowJump.continueGame();
+        float slowSpeed = slowJump.getSpeed();
+        slowJump.jump();
+        float expectedSlowVy = -490f + slowSpeed
+                * (float) Math.sin(Math.toRadians(wall.exitDegrees));
+        check(slowJump.hasAirborneMomentum()
+                        && Math.abs(slowJump.getVelocityY() - expectedSlowVy) < .02f,
+                "jumping downhill combines the jump impulse and slope tangent velocity");
+        RunnerEngine fastJump = new RunnerEngine();
+        fastJump.restore(wallSeed, RunnerEngine.MAX_LIVES, slopeX, slopeY,
+                0f, 0f, 0d, 1.5f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        fastJump.continueGame();
+        fastJump.jump();
+        check(fastJump.getVelocityY() > slowJump.getVelocityY()
+                        && fastJump.getSpeed() > slowJump.getSpeed(),
+                "more speed along the descending face gives greater forward and downward momentum");
+
+        RunnerEngine platformCourse = new RunnerEngine();
+        RunnerEngine.Platform safePlatform = null;
+        long platformSeed = -1L;
+        for (long seed = 0; seed < 60 && safePlatform == null; seed++) {
+            RunnerEngine layout = started(seed);
+            layout.generateAhead(6500f);
+            for (RunnerEngine.Platform platform : layout.getPlatforms()) {
+                if (platform.x > 5000f) break;
+                if (openGround(layout, platform.end(), platform.end() + 200f)) {
+                    safePlatform = platform;
+                    platformSeed = seed;
+                    break;
+                }
+            }
+        }
+        check(safePlatform != null, "found a platform leading to open ground");
+        float edgeX = safePlatform.end() - 1f;
+        platformCourse.restore(platformSeed, RunnerEngine.MAX_LIVES, edgeX,
+                safePlatform.top - RunnerEngine.PLAYER_HEIGHT, 0f, 0f,
+                0d, 1f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        platformCourse.continueGame();
+        float edgeSpeed = platformCourse.getSpeed();
+        platformCourse.update(1f / 120f);
+        check(platformCourse.hasAirborneMomentum()
+                        && Math.abs(platformCourse.getSpeed() - edgeSpeed) < .01f
+                        && platformCourse.getPlayerY() + RunnerEngine.PLAYER_HEIGHT
+                        < RunnerEngine.GROUND_Y - 50f,
+                "driving off a platform carries its approach speed into a flat launch");
+        RunnerEngine slowerEdge = new RunnerEngine();
+        slowerEdge.restore(platformSeed, RunnerEngine.MAX_LIVES, edgeX,
+                safePlatform.top - RunnerEngine.PLAYER_HEIGHT, 0f, 0f,
+                0d, .8f, RunnerEngine.Mode.RUNNING, RunnerEngine.Mode.RUNNING);
+        slowerEdge.continueGame();
+        slowerEdge.update(1f / 120f);
+        check(slowerEdge.hasAirborneMomentum(), "slower approach also leaves the flat edge");
+        RunnerEngine replay = new RunnerEngine();
+        replay.restore(platformCourse.getSeed(), platformCourse.getLives(),
+                platformCourse.getPlayerX(), platformCourse.getPlayerY(),
+                platformCourse.getVelocityY(), platformCourse.getCountdownSeconds(),
+                platformCourse.getElapsedRunSeconds(),
+                platformCourse.getTerrainSpeedMultiplier(), platformCourse.getMode(),
+                platformCourse.getResumeMode());
+        replay.restoreAirborneMomentum(platformCourse.hasAirborneMomentum(),
+                platformCourse.getAirborneSpeed());
+        replay.continueGame();
+        platformCourse.update(.05f);
+        slowerEdge.update(.05f);
+        replay.update(.05f);
+        check(Math.abs(replay.getPlayerX() - platformCourse.getPlayerX()) < .02f
+                        && Math.abs(replay.getPlayerY() - platformCourse.getPlayerY()) < .02f,
+                "airborne momentum and trajectory survive pause restoration");
+        check(platformCourse.getPlayerX() > slowerEdge.getPlayerX()
+                        && Math.abs(platformCourse.getPlayerY() - slowerEdge.getPlayerY()) < .02f,
+                "a faster flat-edge launch travels farther with the same gravitational fall");
+        for (int i = 0; i < 100 && platformCourse.hasAirborneMomentum(); i++) {
+            platformCourse.update(1f / 120f);
+        }
+        check(!platformCourse.hasAirborneMomentum()
+                        && platformCourse.getLives() == RunnerEngine.MAX_LIVES,
+                "the departing motorcycle lands on open ground without losing a life");
+    }
+
     private static void testHovercarJumpPitch() {
         RunnerEngine game = started(1L);
         check(game.getPlayerPitchDegrees() == 0f, "hovercar is level on flat ground");
@@ -2943,6 +3070,7 @@ public final class RunnerEngineChecks {
         testGroundBumps();
         testFirstJumpHint();
         testSlopes();
+        testBallisticDepartures();
         testHovercarJumpPitch();
         testLandingOnSteepRisingSlopes();
         testLandingAcrossShortRisingSlopes();
